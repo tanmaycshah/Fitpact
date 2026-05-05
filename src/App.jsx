@@ -824,6 +824,7 @@ export default function App() {
   const [weekLogModal, setWeekLogModal] = useState(null); // {goal, weekKey, log}
   const [dayLogModal, setDayLogModal] = useState(null); // {goal, date, log, memberId}
   const [viewingMember, setViewingMember] = useState(null); // for admin to browse other members
+  const [weekOffset, setWeekOffset] = useState(0); // 0=this week, -1=last week etc.
   const [hobbyLogModal, setHobbyLogModal] = useState(null);
   const [overrideModal, setOverrideModal] = useState(null); // {memberId, weekKey, goalId, memberName, goalName}
   const [approveModal, setApproveModal] = useState(null); // pending user
@@ -834,7 +835,13 @@ export default function App() {
   const [monthCloseOpen, setMonthCloseOpen] = useState(false);
   const [memberDetailOpen, setMemberDetailOpen] = useState(null);
 
-  const weekKey = currentWeekKey();
+  const weekKey = (() => {
+    if (weekOffset === 0) return currentWeekKey();
+    const d = new Date();
+    d.setDate(d.getDate() + weekOffset * 7);
+    return getWeekKey(d);
+  })();
+  const isCurrentWeek = weekOffset === 0;
   const showToast = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast({ msg: "", type: "" }), 3000); };
   const isAdmin = userDoc?.isAdmin || false;
   // Only the original admin (earliest createdAt) can promote others
@@ -1172,7 +1179,7 @@ This CANNOT be undone.`)) return;
       {/* ── TABS ── */}
       <div style={{ display: "flex", gap: 2, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, overflowX: "auto", background: C.bg, position: "sticky", top: 57, zIndex: 99 }}>
         {[["dashboard","📊","Board"],["myweek","📋","My Week"],["squad","👥","Squad"],["fines","💸","Fines"],["hobbies","🎸","Hobbies"],["history","🏆","History"],["feed","📡","Feed"],["banter","🗣️","Banter"],["members","⚙️","Members"]].map(([id, icon, lbl]) => (
-          <button key={id} className={`tab-b ${tab === id ? "on" : ""}`} onClick={() => setTab(id)}>
+          <button key={id} className={`tab-b ${tab === id ? "on" : ""}`} onClick={() => { setTab(id); if (id !== "myweek") setWeekOffset(0); }}>
             <span style={{ fontSize: 16 }}>{icon}</span>
             <span>{lbl}</span>
           </button>
@@ -1236,11 +1243,30 @@ This CANNOT be undone.`)) return;
         {/* ════ MY WEEK ════ */}
         {tab === "myweek" && (
           <div>
-            {/* Header + member switcher */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24 }}>MY WEEK</div>
-              <div style={{ fontSize: 11, color: C.muted, fontFamily: "'DM Mono',monospace" }}>{weekKey}</div>
+            {/* Week navigator */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <button onClick={() => setWeekOffset(o => o - 1)}
+                style={{ background: C.card, border: `1px solid ${C.border2}`, color: C.text, borderRadius: 8, padding: "7px 14px", cursor: "pointer", fontSize: 18, flexShrink: 0 }}>‹</button>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 22, color: isCurrentWeek ? C.lime : C.text }}>
+                  {isCurrentWeek ? "THIS WEEK" : weekOffset === -1 ? "LAST WEEK" : `${Math.abs(weekOffset)} WEEKS AGO`}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, fontFamily: "'DM Mono',monospace" }}>
+                  {(() => { const d = getWeekDates(weekKey); return `${formatDate(d[0])} — ${formatDate(d[6])}`; })()}
+                </div>
+              </div>
+              <button onClick={() => setWeekOffset(o => Math.min(0, o + 1))}
+                disabled={isCurrentWeek}
+                style={{ background: isCurrentWeek ? "#0a0a0a" : C.card, border: `1px solid ${isCurrentWeek ? C.border : C.border2}`, color: isCurrentWeek ? "#333" : C.text, borderRadius: 8, padding: "7px 14px", cursor: isCurrentWeek ? "default" : "pointer", fontSize: 18, flexShrink: 0 }}>›</button>
             </div>
+
+            {/* Past week notice */}
+            {!isCurrentWeek && (
+              <div style={{ background: "rgba(255,184,0,0.07)", border: "1px solid rgba(255,184,0,0.2)", borderRadius: 10, padding: "8px 14px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: C.amber }}>📅 Historical — read only</span>
+                <button onClick={() => setWeekOffset(0)} style={{ fontSize: 11, color: C.lime, background: "transparent", border: "none", cursor: "pointer", fontWeight: 700 }}>Back to now →</button>
+              </div>
+            )}
 
             {/* Member switcher — always visible for admins */}
             {isAdmin && members.length > 1 && (
@@ -1392,14 +1418,22 @@ This CANNOT be undone.`)) return;
                                 if (isMissed) { bg = "rgba(255,85,85,0.1)"; border = "rgba(255,85,85,0.4)"; textClr = C.red; }
                                 if (isFuture) { bg = "#0a0a0a"; border = "#1a1a1a"; textClr = "#333"; }
 
+                                const canTap = isCurrentWeek && !isFuture;
+                                // grey-out unlogged days in past weeks
+                                if (!isCurrentWeek && !isLogged && !isFuture) {
+                                  textClr = "#444"; border = "#222";
+                                }
                                 return (
-                                  <button key={date} disabled={isFuture}
-                                    onClick={() => setDayLogModal({ goal, date, log: dl || null, memberId: activeMem.id })}
-                                    style={{ aspectRatio: "1", borderRadius: 8, border: `1.5px solid ${border}`, background: bg, color: textClr, fontSize: 11, fontWeight: 700, cursor: isFuture ? "default" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, padding: 2 }}>
+                                  <button key={date}
+                                    disabled={!canTap}
+                                    onClick={() => canTap && setDayLogModal({ goal, date, log: dl || null, memberId: activeMem.id })}
+                                    title={!canTap && !isFuture ? "Historical — read only" : ""}
+                                    style={{ aspectRatio: "1", borderRadius: 8, border: `1.5px solid ${border}`, background: bg, color: textClr, fontSize: 11, fontWeight: 700, cursor: canTap ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, padding: 2 }}>
                                     <span style={{ fontSize: 10 }}>{getDayLabel(date)[0]}</span>
                                     {hasValue && <span style={{ fontSize: 8 }}>{dl.value}</span>}
                                     {isLogged && !hasValue && <span style={{ fontSize: 8 }}>✓</span>}
                                     {isMissed && <span style={{ fontSize: 8 }}>✕</span>}
+                                    {!isCurrentWeek && !isLogged && !isFuture && <span style={{ fontSize: 8 }}>—</span>}
                                   </button>
                                 );
                               })}
