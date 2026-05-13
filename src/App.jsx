@@ -426,20 +426,15 @@ function DayLogModal({ open, onClose, goal, date, existingLog, onSave, isHistori
     if (saving || ref.current) return;
     ref.current = true; setSaving(true);
     const data = isNumeric
-      ? { done: (parseFloat(value) || 0) > 0, value: parseFloat(value) || 0, note, ...(isHistorical ? { editedHistorically: true, editedAt: new Date().toISOString() } : {}) }
-      : { done, note, ...(isHistorical ? { editedHistorically: true, editedAt: new Date().toISOString() } : {}) };
+      ? { done: (parseFloat(value) || 0) > 0, value: parseFloat(value) || 0, note }
+      : { done, note };
     await onSave(data);
     setSaving(false);
   };
 
   return (
     <Modal open={open} title={`${goal.name?.toUpperCase()} — ${dayLabel.toUpperCase()}`} onClose={onClose} maxWidth={360}>
-      {isHistorical && (
-        <div style={{ background: "rgba(255,184,0,0.08)", border: "1px solid rgba(255,184,0,0.2)", borderRadius: 8, padding: "7px 12px", marginBottom: 12, fontSize: 11, color: C.amber }}>
-          ✏️ Editing historical entry — will be flagged as edited
-        </div>
-      )}
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{cat.icon} {isHistorical ? "Update past entry" : "Tap to mark done or missed"}</div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{cat.icon} Tap to mark done or missed</div>
 
       {isNumeric ? (
         <Fld label={`${unit} today`}>
@@ -823,34 +818,47 @@ function WeeklyNoteSection({ initialNote, onSave }) {
 // ── MONTHLY CALENDAR ──────────────────────────────────────────────────────────
 // Apple Watch style ring SVG for a single day
 function DayRings({ goalStatuses }) {
-  // goalStatuses: array of "done"|"missed"|"empty" — one per goal
-  const n = goalStatuses.length;
+  // Each goal = one concentric arc AT the outer edge of the circle
+  // Outermost ring = goal 1, next inner = goal 2, etc.
+  // Done = full 360° arc, missed = partial arc (~60%), empty = faint track
+  const n = Math.min(goalStatuses.length, 4);
   if (n === 0) return null;
-  const size = 34;
-  const cx = size / 2;
-  const cy = size / 2;
-  const rings = Math.min(n, 4); // max 4 rings
-  const gap = 2;
-  const minR = 4;
-  const maxR = cx - 2;
-  const step = n > 1 ? (maxR - minR) / (n - 1) : 0;
+  const SIZE = 40;          // must match button size
+  const cx = SIZE / 2;
+  const cy = SIZE / 2;
+  const STROKE = 3;         // ring thickness
+  const GAP = 1.5;          // gap between rings
+  const outerR = cx - STROKE / 2 - 1; // just inside the button edge
+
   return (
-    <svg width={size} height={size} style={{ position: "absolute", inset: 0 }} viewBox={`0 0 ${size} ${size}`}>
-      {goalStatuses.slice(0, 4).map((status, i) => {
-        const r = maxR - i * (n > 1 ? (maxR - minR) / (Math.min(n,4) - 1) : 0);
-        const circumf = 2 * Math.PI * r;
-        const clr = status === "done" ? "#c8f53b" : status === "missed" ? "#ff5555" : "#2a2a2a";
-        const bg = status === "empty" ? "#1a1a1a" : "#0a0a0a";
+    <svg width={SIZE} height={SIZE}
+      style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+      viewBox={`0 0 ${SIZE} ${SIZE}`}>
+      {goalStatuses.slice(0, n).map((status, i) => {
+        const r = outerR - i * (STROKE + GAP);
+        const circ = 2 * Math.PI * r;
+        const trackClr = "#1e1e1e";
+        const ringClr = status === "done" ? "#c8f53b"
+                      : status === "missed" ? "#ff5555"
+                      : null;
+        // done = full circle, missed = 55% arc, empty = no arc (just track)
+        const dashLen = status === "done" ? circ
+                      : status === "missed" ? circ * 0.55
+                      : 0;
+        // start from top (offset by -90°)
+        const offset = -circ * 0.25;
         return (
           <g key={i}>
-            <circle cx={cx} cy={cy} r={r} fill="none" stroke={bg} strokeWidth={2.5} />
-            {status !== "empty" && (
-              <circle cx={cx} cy={cy} r={r} fill="none" stroke={clr} strokeWidth={2.5}
-                strokeDasharray={`${circumf * (status === "done" ? 1 : 0.4)} ${circumf}`}
-                strokeDashoffset={circumf * 0.25}
-                strokeLinecap="round"
-                style={{ transition: "stroke-dasharray 0.4s ease" }}
-              />
+            {/* Track */}
+            <circle cx={cx} cy={cy} r={r} fill="none"
+              stroke={trackClr} strokeWidth={STROKE} />
+            {/* Arc */}
+            {ringClr && (
+              <circle cx={cx} cy={cy} r={r} fill="none"
+                stroke={ringClr} strokeWidth={STROKE}
+                strokeDasharray={`${dashLen} ${circ}`}
+                strokeDashoffset={offset}
+                strokeLinecap="round" />
             )}
           </g>
         );
@@ -943,12 +951,12 @@ function MonthlyCalendar({ members, goals, dayLogs, fines, activeMemberId, onMem
       )}
 
       {/* Day headers */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 40px)", gap: 6, justifyContent: "space-between", marginBottom: 6 }}>
         {["M","T","W","T","F","S","S"].map((d,i) => <div key={i} style={{ textAlign: "center", fontSize: 10, color: "#555", fontWeight: 700, padding: "3px 0" }}>{d}</div>)}
       </div>
 
       {/* Calendar grid with Apple Watch rings */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 40px)", gap: 6, justifyContent: "space-between" }}>
         {Array.from({ length: firstDow }).map((_,i) => <div key={`e${i}`} />)}
         {Array.from({ length: daysInMonth },(_,i)=>i+1).map(day => {
           const d = ds(day);
@@ -968,9 +976,9 @@ function MonthlyCalendar({ members, goals, dayLogs, fines, activeMemberId, onMem
                 setSelDay(day);
               }}
               style={{
-                aspectRatio: "1", borderRadius: "50%", position: "relative",
-                border: isToday ? "2px solid #c8f53b" : isFuture ? "1px solid #1a1a1a" : notLogged ? "1px solid #222" : "none",
-                background: isSel ? "rgba(200,245,59,0.15)" : "transparent",
+                width: 40, height: 40, borderRadius: "50%", position: "relative",
+                border: isToday ? "2.5px solid #c8f53b" : "none",
+                background: isSel ? "rgba(200,245,59,0.12)" : "transparent",
                 color: isToday ? "#c8f53b" : isFuture ? "#2a2a2a" : notLogged ? "#444" : allDone ? "#c8f53b" : anyMissed ? "#ff6666" : "#ffb800",
                 fontSize: 11, fontWeight: isToday ? 700 : 400,
                 cursor: isFuture ? "default" : "pointer",
@@ -1021,7 +1029,7 @@ function MonthlyCalendar({ members, goals, dayLogs, fines, activeMemberId, onMem
                       <span>{cat.icon} {g.name}</span>
                       <span style={{ color: dl?.done||dl?.value>0 ? "#c8f53b" : dl ? "#ff5555" : "#444" }}>
                         {dl ? (dl.done ? "✅" : dl.value>0 ? `${dl.value} ${cat.defaultUnit}` : "❌") : "—"}
-                        {dl?.editedHistorically && <span style={{ color:"#ffb800",marginLeft:4,fontSize:10 }}>✎</span>}
+                        
                       </span>
                     </div>
                   );
@@ -1046,103 +1054,127 @@ function exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, m
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
-  // Sheet 1: Weekly Activity Log — each member × goal × week
-  // Collect all unique weekKeys from dayLogs
+  // Collect all weeks with any data
   const weekSet = new Set();
   Object.keys(dayLogs).forEach(k => {
     const d = k.split("__")[2];
-    if (d) {
-      try { weekSet.add(getWeekKey(new Date(d))); } catch {}
+    if (d) { try { weekSet.add(getWeekKey(new Date(d))); } catch {} }
+  });
+  const sortedWeeks = [...weekSet].sort();
+
+  // Helper: compute fine for one member/goal/week
+  const computeFine = (m, g, wk) => {
+    const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+    const override = fines[`${m.id}__${wk}__${g.id}`];
+    if (override?.overridden) return override.customAmount ?? 0;
+    const wDates = getWeekDates(wk);
+    const finePerMiss = Number(g.fineAmount) || 0;
+    const target = Number(g.weeklyTarget) || 0;
+    const logType = g.logType || cat.logType;
+    const direction = g.direction || cat.direction;
+    const cadence = g.cadence || cat.cadence;
+    if (logType === "tick") {
+      const done = wDates.filter(d => dayLogs[`${m.id}__${g.id}__${d}`]?.done).length;
+      return Math.max(0, target - done) * finePerMiss;
     }
-  });
-  const weekActivityRows = [];
+    if (direction === "max") {
+      const total = wDates.reduce((s,d) => s+(Number(dayLogs[`${m.id}__${g.id}__${d}`]?.value)||0),0);
+      return Math.max(0, total - target) * finePerMiss;
+    }
+    // min numeric
+    if (cadence === "daily") {
+      const today_ = new Date().toISOString().split("T")[0];
+      return wDates.filter(d => {
+        if (d > today_) return false;
+        const dl = dayLogs[`${m.id}__${g.id}__${d}`];
+        if (!dl) return false;
+        return (Number(dl.value)||0) < target;
+      }).length * finePerMiss;
+    }
+    const total = wDates.reduce((s,d) => s+(Number(dayLogs[`${m.id}__${g.id}__${d}`]?.value)||0),0);
+    return total < target ? finePerMiss : 0;
+  };
+
+  // ONE FILE PER MEMBER — member-wise breakdown
   members.forEach(m => {
-    goals.filter(g => g.memberId === m.id).forEach(g => {
-      const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
-      [...weekSet].sort().forEach(wk => {
-        const wDates = getWeekDates(wk);
-        const dayEntries = wDates.map(date => dayLogs[`${m.id}__${g.id}__${date}`]);
-        const logged = dayEntries.filter(Boolean).length;
-        if (logged === 0) return; // skip weeks with no logs
+    const mGoals = goals.filter(g => g.memberId === m.id);
+    if (!mGoals.length) return;
+
+    const lines = [];
+
+    // Section: Summary header
+    lines.push(row([`MEMBER: ${m.name}`]));
+    lines.push(row([`Goals: ${mGoals.length}`, `Weight: ${m.weight||"-"}kg`, `Height: ${m.height||"-"}cm`]));
+    lines.push(row([]));
+
+    // Section: Weekly activity per goal
+    lines.push(row(["=== WEEKLY ACTIVITY ==="]));
+    lines.push(row(["Week","Week Start","Week End","Goal","Category","Days Done","Target/Day or Wk","Total Value","Fine","Override","Override Reason","Paid"]));
+
+    sortedWeeks.forEach(wk => {
+      const wDates = getWeekDates(wk);
+      mGoals.forEach(g => {
+        const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+        const dayEntries = wDates.map(d => dayLogs[`${m.id}__${g.id}__${d}`]);
+        if (!dayEntries.some(Boolean)) return; // skip empty weeks
         const done = dayEntries.filter(e => e?.done || e?.value > 0).length;
-        const totalValue = dayEntries.reduce((s, e) => s + (e?.value || 0), 0);
+        const totalVal = dayEntries.reduce((s,e) => s+(e?.value||0),0);
         const override = fines[`${m.id}__${wk}__${g.id}`];
-        const fine = override?.overridden ? (override.customAmount ?? 0) : (() => {
-          const finePerMiss = Number(g.fineAmount) || 0;
-          const target = Number(g.weeklyTarget) || 0;
-          if (cat.logType === "tick" || (g.logType === "tick")) return Math.max(0, target - done) * finePerMiss;
-          if ((g.direction || cat.direction) === "max") return Math.max(0, totalValue - target) * finePerMiss;
-          return totalValue < target ? finePerMiss : 0;
-        })();
+        const fine = computeFine(m, g, wk);
         const paid = finePayments[`${m.id}__${wk}`]?.paid ? "Yes" : fine > 0 ? "No" : "";
-        weekActivityRows.push(row([
-          m.name, g.name, cat.icon + " " + cat.label,
-          wk, wDates[0], wDates[6],
-          done, g.weeklyTarget, totalValue || done,
-          fine > 0 ? fine : "", override?.overridden ? "Yes" : "No",
-          override?.overrideReason || "", override?.overriddenBy || "",
-          paid
-        ]));
+        lines.push(row([wk, wDates[0], wDates[6], g.name, cat.label, done, g.weeklyTarget, totalVal||done, fine||"", override?.overridden?"Yes":"No", override?.overrideReason||"", paid]));
       });
     });
-  });
-  const weeklyCSV = [
-    row(["Member","Goal","Category","Week","Week Start","Week End","Days Done","Target","Total Value","Fine","Overridden","Override Reason","Override By","Paid"]),
-    ...weekActivityRows
-  ].join("\n");
-  dl("Weekly_Activity_Fines", weeklyCSV);
 
-  // Sheet 2: Monthly Rollup — member × goal × month
-  const monthSet = new Set();
-  Object.keys(dayLogs).forEach(k => { const d = k.split("__")[2]; if (d) monthSet.add(d.substring(0,7)); });
-  const monthlyRows = [];
-  members.forEach(m => {
-    goals.filter(g => g.memberId === m.id).forEach(g => {
-      const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
-      [...monthSet].sort().forEach(mo => {
-        const moEntries = Object.keys(dayLogs)
-          .filter(k => k.startsWith(`${m.id}__${g.id}__`) && k.split("__")[2]?.startsWith(mo))
-          .map(k => dayLogs[k]);
-        if (!moEntries.length) return;
-        const done = moEntries.filter(e => e?.done || e?.value > 0).length;
-        const totalValue = moEntries.reduce((s,e) => s + (e?.value||0), 0);
-        // sum fines for this month
-        const moFines = Object.keys(fines)
-          .filter(k => { const f=fines[k]; return f.memberId===m.id && f.goalId===g.id && f.weekKey?.startsWith(mo); })
-          .reduce((s,k) => s + (fines[k].overridden ? (fines[k].customAmount??0) : 0), 0);
-        const mc = months.find(x => x.id === mo);
-        monthlyRows.push(row([m.name, g.name, cat.icon+" "+cat.label, mo, done, moEntries.length, totalValue||done, moFines||"", mc?.closedAt||"Auto", mc?.closedBy||""]));
+    lines.push(row([]));
+
+    // Section: Monthly rollup
+    const monthSet2 = new Set(sortedWeeks.map(wk => wk.substring(0,4)+"-"+("0"+(Math.ceil(parseInt(wk.split("-W")[1])/4.33))).slice(-2)));
+    lines.push(row(["=== MONTHLY ROLLUP ==="]));
+    lines.push(row(["Month","Goal","Days Done","Days Logged","Total Value","Month Fine","Paid"]));
+    const allMonths = new Set();
+    Object.keys(dayLogs).filter(k=>k.startsWith(`${m.id}__`)).forEach(k=>{const d=k.split("__")[2];if(d)allMonths.add(d.substring(0,7));});
+    [...allMonths].sort().forEach(mo => {
+      mGoals.forEach(g => {
+        const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+        const entries = Object.keys(dayLogs)
+          .filter(k=>k.startsWith(`${m.id}__${g.id}__`)&&k.split("__")[2]?.startsWith(mo))
+          .map(k=>dayLogs[k]);
+        if (!entries.length) return;
+        const done = entries.filter(e=>e?.done||e?.value>0).length;
+        const total = entries.reduce((s,e)=>s+(e?.value||0),0);
+        const moFine = sortedWeeks.filter(wk=>wk.startsWith(mo.substring(0,4))).reduce((s,wk)=>s+computeFine(m,g,wk),0);
+        const moPaid = Object.values(finePayments).filter(p=>p.memberId===m.id&&p.weekKey?.startsWith(mo)&&p.paid).length > 0;
+        lines.push(row([mo, g.name, done, entries.length, total||done, moFine||"", moPaid?"Yes":""]));
       });
     });
+
+    lines.push(row([]));
+
+    // Section: Fine payments
+    const mPayments = Object.values(finePayments).filter(p=>p.memberId===m.id);
+    if (mPayments.length) {
+      lines.push(row(["=== FINE PAYMENTS ==="]));
+      lines.push(row(["Week","Total Fine","Paid","Paid At","Marked By"]));
+      mPayments.forEach(p => {
+        const wkFine = mGoals.reduce((s,g)=>s+computeFine(m,g,p.weekKey),0);
+        const paidAt = p.paidAt?.seconds ? new Date(p.paidAt.seconds*1000).toISOString().split("T")[0] : "";
+        lines.push(row([p.weekKey, wkFine||"", p.paid?"Yes":"No", paidAt, p.markedBy||""]));
+      });
+      lines.push(row([]));
+    }
+
+    // Section: Week notes
+    const mNotes = Object.values(weekNotes).filter(n=>n.memberId===m.id&&n.text);
+    if (mNotes.length) {
+      lines.push(row(["=== WEEK NOTES ==="]));
+      lines.push(row(["Week","Note"]));
+      mNotes.sort((a,b)=>a.weekKey?.localeCompare(b.weekKey)).forEach(n=>lines.push(row([n.weekKey,n.text])));
+    }
+
+    const csv = lines.join("\n");
+    dl(`${m.name.replace(/[^a-zA-Z0-9]/g,"_")}`, csv);
   });
-  const monthlyCSV = [
-    row(["Member","Goal","Category","Month","Days Done","Days Logged","Total Value","Fines","Month Closed At","Closed By"]),
-    ...monthlyRows
-  ].join("\n");
-  dl("Monthly_Rollup", monthlyCSV);
-
-  // Sheet 3: Fine payments summary
-  const paymentsCSV = [
-    row(["Member","Week","Fine Amount","Paid","Paid At","Marked By"]),
-    ...Object.values(finePayments).map(p => {
-      const m = members.find(x => x.id === p.memberId);
-      const wkFine = goals.filter(g => g.memberId === p.memberId).reduce((s,g) => {
-        const f = fines[`${p.memberId}__${p.weekKey}__${g.id}`];
-        return s + ((f?.overridden ? f.customAmount??0 : 0) || 0);
-      }, 0);
-      const paidAt = p.paidAt?.seconds ? new Date(p.paidAt.seconds*1000).toISOString().split("T")[0] : "";
-      return row([m?.name||"", p.weekKey||"", wkFine||"", p.paid?"Yes":"No", paidAt, p.markedBy||""]);
-    })
-  ].join("\n");
-  dl("Fine_Payments", paymentsCSV);
-
-  // Sheet 4: Week notes
-  if (Object.keys(weekNotes).length) {
-    const notesCSV = [row(["Member","Week","Note"]),
-      ...Object.values(weekNotes).filter(n => n.text).map(n => { const m=members.find(x=>x.id===n.memberId); return row([m?.name||"",n.weekKey||"",n.text||""]); })
-    ].join("\n");
-    dl("Week_Notes", notesCSV);
-  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1548,7 +1580,7 @@ This CANNOT be undone.`)) return;
 
       {/* ── TABS ── */}
       <div style={{ display: "flex", gap: 2, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, overflowX: "auto", background: C.bg, position: "sticky", top: 57, zIndex: 99 }}>
-        {[["dashboard","📊","Board"],["myweek","📋","My Week"],["squad","👥","Squad"],["fines","💸","Fines"],["hobbies","🎸","Hobbies"],["leaderboard","🏆","Board"],["calendar","📅","Calendar"],["feed","📡","Feed"],["banter","🗣️","Banter"],["members","⚙️","Members"]].map(([id, icon, lbl]) => (
+        {[["dashboard","📊","Board"],["myweek","📋","My Week"],["calendar","📅","Calendar"],["squad","👥","Squad"],["fines","💸","Fines"],["hobbies","🎸","Hobbies"],["leaderboard","🏆","Scores"],["feed","📡","Feed"],["banter","🗣️","Banter"],["members","⚙️","Members"]].map(([id, icon, lbl]) => (
           <button key={id} className={`tab-b ${tab === id ? "on" : ""}`} onClick={() => { setTab(id); if (id !== "myweek") setWeekOffset(0); }}>
             <span style={{ fontSize: 16 }}>{icon}</span>
             <span>{lbl}</span>
@@ -1711,10 +1743,9 @@ This CANNOT be undone.`)) return;
                 style={{ background: isCurrentWeek ? "#0a0a0a" : C.card, border: `1px solid ${isCurrentWeek ? C.border : C.border2}`, color: isCurrentWeek ? "#333" : C.text, borderRadius: 8, padding: "7px 14px", cursor: isCurrentWeek ? "default" : "pointer", fontSize: 18, flexShrink: 0 }}>›</button>
             </div>
 
-            {/* Past week notice */}
+            {/* Past week — quiet indicator + back button */}
             {!isCurrentWeek && (
-              <div style={{ background: "rgba(255,184,0,0.07)", border: "1px solid rgba(255,184,0,0.2)", borderRadius: 10, padding: "8px 14px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: C.amber }}>📅 Historical — read only</span>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
                 <button onClick={() => setWeekOffset(0)} style={{ fontSize: 11, color: C.lime, background: "transparent", border: "none", cursor: "pointer", fontWeight: 700 }}>Back to now →</button>
               </div>
             )}
@@ -1882,8 +1913,8 @@ This CANNOT be undone.`)) return;
                                     style={{ aspectRatio: "1", borderRadius: 8, border: `1.5px solid ${border}`, background: bg, color: textClr, fontSize: 11, fontWeight: 700, cursor: canTap ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, padding: 2 }}>
                                     <span style={{ fontSize: 10 }}>{getDayLabel(date)[0]}</span>
                                     {hasValue && <span style={{ fontSize: 8 }}>{dl.value}</span>}
-                                    {isLogged && !hasValue && <span style={{ fontSize: 8 }}>{dl?.editedHistorically ? "✎" : "✓"}</span>}
-                                    {isMissed && <span style={{ fontSize: 8 }}>{dl?.editedHistorically ? "✎" : "✕"}</span>}
+                                    {isLogged && !hasValue && <span style={{ fontSize: 8 }}>✓</span>}
+                                    {isMissed && <span style={{ fontSize: 8 }}>✕</span>}
                                     {!isCurrentWeek && !isLogged && !isFuture && <span style={{ fontSize: 8 }}>—</span>}
                                   </button>
                                 );

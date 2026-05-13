@@ -146,9 +146,28 @@ export function calcFine({ goal, weekKey, dayLogs, override }) {
   }
 
   // ── NUMERIC MIN goals (steps, water, running, pushups, weight) ────────────
-  // direction === "min" — target = minimum to hit per week (or per day avg)
-  // fine = ONE fine if total for week < target, else 0
+  // direction === "min"
+  // cadence === "daily" → fine per day where logged value < daily target
+  // cadence === "weekly" → one fine if weekly total < target
   if (logType === "number" && direction === "min") {
+    const cadence = getGoalCadence(goal);
+    if (cadence === "daily") {
+      // Fine per missed day — only count days that have been logged
+      // (don't penalise future/unlogged days)
+      const todayStr = typeof window !== "undefined"
+        ? new Date().toISOString().split("T")[0]
+        : weekDates[6];
+      let missedDays = 0;
+      weekDates.forEach(d => {
+        if (d > todayStr) return; // skip future
+        const dl = dayLogs[`${goal.memberId}__${goal.id}__${d}`];
+        if (!dl) return; // skip unlogged days — benefit of doubt
+        const val = Number(dl.value) || 0;
+        if (val < target) missedDays++;
+      });
+      return missedDays * finePerMiss;
+    }
+    // Weekly cadence — one fine if total misses weekly target
     const total = weekDates.reduce((sum, d) => {
       const dl = dayLogs[`${goal.memberId}__${goal.id}__${d}`];
       return sum + (Number(dl?.value) || 0);
@@ -165,10 +184,14 @@ export function calcMaxFine({ goal }) {
   const target      = Number(goal.weeklyTarget) || 0;
   const logType     = getGoalLogType(goal);
   const direction   = getGoalDirection(goal);
+  const cadence     = getGoalCadence(goal);
 
   if (logType === "tick") return target * finePerMiss;
-  if (logType === "number" && direction === "max") return 0; // unlimited upside, no ceiling
-  if (logType === "number" && direction === "min") return finePerMiss; // one fine
+  if (logType === "number" && direction === "max") return 0; // unlimited, no ceiling
+  if (logType === "number" && direction === "min") {
+    // Daily goals: max = 7 days × finePerMiss
+    return cadence === "daily" ? 7 * finePerMiss : finePerMiss;
+  }
   return 0;
 }
 
