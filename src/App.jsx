@@ -821,7 +821,45 @@ function WeeklyNoteSection({ initialNote, onSave }) {
 }
 
 // ── MONTHLY CALENDAR ──────────────────────────────────────────────────────────
-function MonthlyCalendar({ members, goals, dayLogs, activeMemberId, onMemberChange }) {
+// Apple Watch style ring SVG for a single day
+function DayRings({ goalStatuses }) {
+  // goalStatuses: array of "done"|"missed"|"empty" — one per goal
+  const n = goalStatuses.length;
+  if (n === 0) return null;
+  const size = 34;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rings = Math.min(n, 4); // max 4 rings
+  const gap = 2;
+  const minR = 4;
+  const maxR = cx - 2;
+  const step = n > 1 ? (maxR - minR) / (n - 1) : 0;
+  return (
+    <svg width={size} height={size} style={{ position: "absolute", inset: 0 }} viewBox={`0 0 ${size} ${size}`}>
+      {goalStatuses.slice(0, 4).map((status, i) => {
+        const r = maxR - i * (n > 1 ? (maxR - minR) / (Math.min(n,4) - 1) : 0);
+        const circumf = 2 * Math.PI * r;
+        const clr = status === "done" ? "#c8f53b" : status === "missed" ? "#ff5555" : "#2a2a2a";
+        const bg = status === "empty" ? "#1a1a1a" : "#0a0a0a";
+        return (
+          <g key={i}>
+            <circle cx={cx} cy={cy} r={r} fill="none" stroke={bg} strokeWidth={2.5} />
+            {status !== "empty" && (
+              <circle cx={cx} cy={cy} r={r} fill="none" stroke={clr} strokeWidth={2.5}
+                strokeDasharray={`${circumf * (status === "done" ? 1 : 0.4)} ${circumf}`}
+                strokeDashoffset={circumf * 0.25}
+                strokeLinecap="round"
+                style={{ transition: "stroke-dasharray 0.4s ease" }}
+              />
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function MonthlyCalendar({ members, goals, dayLogs, fines, activeMemberId, onMemberChange, onDateClick }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -833,29 +871,39 @@ function MonthlyCalendar({ members, goals, dayLogs, activeMemberId, onMemberChan
   const pad = n => String(n).padStart(2,"0");
   const ds = day => `${year}-${pad(month+1)}-${pad(day)}`;
 
-  const getDayStatus = (day) => {
-    if (!activeMemberId) return "empty";
+  // For each day, get per-goal statuses
+  const getDayGoalStatuses = (day) => {
+    if (!activeMemberId) return [];
     const d = ds(day);
-    if (d > todayStr) return "future";
-    const mGoals = goals.filter(g => g.memberId === activeMemberId && g.active !== false);
-    if (!mGoals.length) return "empty";
-    let done = 0;
-    mGoals.forEach(g => { const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`]; if (dl?.done || dl?.value > 0) done++; });
-    if (done === 0) return "none";
-    if (done < mGoals.length) return "partial";
-    return "full";
+    if (d > todayStr) return [];
+    return goals.filter(g => g.memberId === activeMemberId && g.active !== false).map(g => {
+      const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`];
+      if (!dl) return "empty";
+      return (dl.done || dl.value > 0) ? "done" : "missed";
+    });
   };
 
-  const ST = {
-    full:    { border: "2px solid #c8f53b",          color: "#c8f53b",  bg: "rgba(200,245,59,0.12)" },
-    partial: { border: "2px solid #ffb800",           color: "#ffb800",  bg: "rgba(255,184,0,0.08)" },
-    none:    { border: "2px solid rgba(255,85,85,0.5)", color: "#ff5555", bg: "rgba(255,85,85,0.06)" },
-    future:  { border: "1px solid #1a1a1a",           color: "#333",     bg: "transparent" },
-    empty:   { border: "1px solid #2a2a2a",           color: "#555",     bg: "transparent" },
-  };
+  // Monthly stats
+  const mGoals = goals.filter(g => g.memberId === activeMemberId && g.active !== false);
+  const monthDays = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  const pastDays = monthDays.filter(d => ds(d) <= todayStr);
+  let monthDone = 0, monthTotal = 0, monthFine = 0;
+  pastDays.forEach(day => {
+    mGoals.forEach(g => {
+      const d = ds(day);
+      monthTotal++;
+      const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`];
+      if (dl?.done || dl?.value > 0) monthDone++;
+      // fine contribution
+      const wk = getWeekKey(new Date(d));
+      const override = fines[`${activeMemberId}__${wk}__${g.id}`];
+      if (!override?.overridden && dl && !dl.done && !dl.value) monthFine += (g.fineAmount || 0);
+    });
+  });
 
   return (
     <div>
+      {/* Member selector */}
       <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 14, paddingBottom: 2 }}>
         {members.map((m, idx) => {
           const active = activeMemberId === m.id;
@@ -868,62 +916,121 @@ function MonthlyCalendar({ members, goals, dayLogs, activeMemberId, onMemberChan
           );
         })}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+
+      {/* Month navigator */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <button onClick={() => { if (month === 0) { setMonth(11); setYear(y=>y-1); } else setMonth(m=>m-1); }}
           style={{ background: "#111", border: "1px solid #2a2a2a", color: "#f0ede6", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 16 }}>‹</button>
         <div style={{ flex: 1, textAlign: "center", fontFamily: "'Bebas Neue',cursive", fontSize: 22, color: "#c8f53b", letterSpacing: 1 }}>{MONTHS[month]} {year}</div>
         <button onClick={() => { if (month === 11) { setMonth(0); setYear(y=>y+1); } else setMonth(m=>m+1); }}
           style={{ background: "#111", border: "1px solid #2a2a2a", color: "#f0ede6", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 16 }}>›</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 6 }}>
+
+      {/* Monthly stats strip */}
+      {activeMemberId && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+          {[
+            { l: "Activities Done", v: `${monthDone}/${monthTotal}`, c: monthDone === monthTotal && monthTotal > 0 ? "#c8f53b" : "#ffb800" },
+            { l: "Completion", v: monthTotal > 0 ? `${Math.round((monthDone/monthTotal)*100)}%` : "—", c: "#c8f53b" },
+            { l: "Fines (MTD)", v: `₹${monthFine.toLocaleString("en-IN")}`, c: monthFine > 0 ? "#ff5555" : "#c8f53b" },
+          ].map(p => (
+            <div key={p.l} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 10, padding: "10px 10px" }}>
+              <div style={{ fontSize: 9, color: "#666", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{p.l}</div>
+              <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 20, color: p.c, lineHeight: 1 }}>{p.v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Day headers */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 4 }}>
         {["M","T","W","T","F","S","S"].map((d,i) => <div key={i} style={{ textAlign: "center", fontSize: 10, color: "#555", fontWeight: 700, padding: "3px 0" }}>{d}</div>)}
       </div>
+
+      {/* Calendar grid with Apple Watch rings */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
         {Array.from({ length: firstDow }).map((_,i) => <div key={`e${i}`} />)}
         {Array.from({ length: daysInMonth },(_,i)=>i+1).map(day => {
-          const st = getDayStatus(day);
-          const s = ST[st];
-          const isToday = ds(day) === todayStr;
+          const d = ds(day);
+          const isFuture = d > todayStr;
+          const isToday = d === todayStr;
           const isSel = selDay === day;
+          const statuses = getDayGoalStatuses(day);
+          const allDone = statuses.length > 0 && statuses.every(s => s === "done");
+          const anyMissed = statuses.some(s => s === "missed");
+          const notLogged = statuses.length > 0 && statuses.every(s => s === "empty");
+
           return (
             <button key={day}
-              onClick={() => st !== "future" && activeMemberId && setSelDay(selDay===day ? null : day)}
-              style={{ aspectRatio: "1", borderRadius: "50%", border: isToday ? "2.5px solid #c8f53b" : s.border, background: isSel ? "rgba(200,245,59,0.2)" : s.bg, color: isToday ? "#c8f53b" : s.color, fontSize: 12, fontWeight: isToday ? 700 : 400, cursor: st !== "future" && activeMemberId ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {day}
+              onClick={() => {
+                if (isFuture) return;
+                if (isSel) { setSelDay(null); return; }
+                setSelDay(day);
+              }}
+              style={{
+                aspectRatio: "1", borderRadius: "50%", position: "relative",
+                border: isToday ? "2px solid #c8f53b" : isFuture ? "1px solid #1a1a1a" : notLogged ? "1px solid #222" : "none",
+                background: isSel ? "rgba(200,245,59,0.15)" : "transparent",
+                color: isToday ? "#c8f53b" : isFuture ? "#2a2a2a" : notLogged ? "#444" : allDone ? "#c8f53b" : anyMissed ? "#ff6666" : "#ffb800",
+                fontSize: 11, fontWeight: isToday ? 700 : 400,
+                cursor: isFuture ? "default" : "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                zIndex: 0,
+              }}>
+              {!isFuture && !isToday && statuses.length > 0 && <DayRings goalStatuses={statuses} />}
+              <span style={{ position: "relative", zIndex: 1 }}>{day}</span>
             </button>
           );
         })}
       </div>
+
+      {/* Legend */}
       <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
-        {[["#c8f53b","All done"],["#ffb800","Partial"],["rgba(255,85,85,0.7)","Missed"],["#555","Not logged"]].map(([clr,lbl]) => (
+        {[["#c8f53b","Done"],["#ff5555","Missed"],["#2a2a2a","Not logged"],["#c8f53b","Today (circle)"]].map(([clr,lbl],i) => (
           <div key={lbl} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#666" }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", border: `2px solid ${clr}` }} />{lbl}
+            {i === 3
+              ? <div style={{ width: 10, height: 10, borderRadius: "50%", border: `2px solid ${clr}` }} />
+              : <div style={{ width: 10, height: 10, borderRadius: "50%", background: `${clr}33`, border: `1.5px solid ${clr}` }} />
+            }
+            {lbl}
           </div>
         ))}
       </div>
-      {selDay && activeMemberId && (() => {
-        const d = ds(selDay);
-        const mGoals = goals.filter(g => g.memberId === activeMemberId && g.active !== false);
-        return (
-          <div style={{ marginTop: 14, background: "#0d0d0d", border: "1px solid #2a2a2a", borderRadius: 10, padding: "12px 14px" }}>
-            <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 16, color: "#c8f53b", marginBottom: 10 }}>{MONTHS[month].slice(0,3)} {selDay} — DETAILS</div>
-            {mGoals.map(g => {
-              const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
-              const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`];
-              return (
-                <div key={g.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#111", borderRadius: 7, marginBottom: 4, fontSize: 13 }}>
-                  <span>{cat.icon} {g.name}</span>
-                  <span style={{ color: dl?.done||dl?.value>0 ? "#c8f53b" : dl ? "#ff5555" : "#444" }}>
-                    {dl ? (dl.done ? "✅" : dl.value>0 ? `${dl.value} ${cat.defaultUnit}` : "❌") : "—"}
-                    {dl?.editedHistorically && <span style={{ color:"#ffb800",marginLeft:4,fontSize:10 }}>✎ edited</span>}
-                    {dl?.note && <span style={{ color:"#666",marginLeft:4,fontSize:10 }}>· {dl.note}</span>}
-                  </span>
+
+      {/* Tap date → navigate to that week */}
+      {selDay && (
+        <div style={{ marginTop: 14 }}>
+          {/* Day detail */}
+          {activeMemberId && (() => {
+            const d = ds(selDay);
+            const mGoalsDay = goals.filter(g => g.memberId === activeMemberId && g.active !== false);
+            return (
+              <div style={{ background: "#0d0d0d", border: "1px solid #2a2a2a", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 16, color: "#c8f53b" }}>{MONTHS[month].slice(0,3)} {selDay}</div>
+                  <button onClick={() => onDateClick && onDateClick(d)}
+                    style={{ fontSize: 11, color: "#c8f53b", background: "rgba(200,245,59,0.1)", border: "1px solid rgba(200,245,59,0.3)", borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontWeight: 700 }}>
+                    Go to this week →
+                  </button>
                 </div>
-              );
-            })}
-          </div>
-        );
-      })()}
+                {mGoalsDay.map(g => {
+                  const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+                  const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`];
+                  return (
+                    <div key={g.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#111", borderRadius: 7, marginBottom: 4, fontSize: 13 }}>
+                      <span>{cat.icon} {g.name}</span>
+                      <span style={{ color: dl?.done||dl?.value>0 ? "#c8f53b" : dl ? "#ff5555" : "#444" }}>
+                        {dl ? (dl.done ? "✅" : dl.value>0 ? `${dl.value} ${cat.defaultUnit}` : "❌") : "—"}
+                        {dl?.editedHistorically && <span style={{ color:"#ffb800",marginLeft:4,fontSize:10 }}>✎</span>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
@@ -932,47 +1039,110 @@ function MonthlyCalendar({ members, goals, dayLogs, activeMemberId, onMemberChan
 function exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, months }) {
   const esc = v => { if (v == null) return ''; const s = String(v); if (s.includes(',') || s.includes('"')) return '"' + s.replaceAll('"', '""') + '"'; return s; };
   const row = arr => arr.map(esc).join(",");
-
-  const membersCSV = [row(["Name","Weight(kg)","Height(cm)","DOB","Fitness Goal"]),
-    ...members.map(m => row([m.name,m.weight||"",m.height||"",m.dob||"",m.fitnessGoal||""]))
-  ].join("\n");
-
-  const goalsCSV = [row(["Member","Goal","Category","Type","Weekly Target","Fine/Miss","Status"]),
-    ...goals.map(g => { const m=members.find(x=>x.id===g.memberId); return row([m?.name||"",g.name,g.category,g.goalType||"ongoing",g.weeklyTarget,g.fineAmount,g.active===false?"archived":"active"]); })
-  ].join("\n");
-
-  const logRows = {};
-  Object.keys(dayLogs).forEach(k => {
-    const pts = k.split("__"); if (pts.length<3) return;
-    const [mid,gid,date] = pts;
-    const mo = date.substring(0,7);
-    const key = `${mid}||${gid}||${mo}`;
-    if (!logRows[key]) logRows[key]={mid,gid,mo,done:0,total:0};
-    logRows[key].total++;
-    if (dayLogs[k]?.done || dayLogs[k]?.value>0) logRows[key].done++;
-  });
-  const activityCSV = [row(["Member","Goal","Month","Days Done","Days Total"]),
-    ...Object.values(logRows).map(r => { const m=members.find(x=>x.id===r.mid); const g=goals.find(x=>x.id===r.gid); return row([m?.name||r.mid,g?.name||r.gid,r.mo,r.done,r.total]); })
-  ].join("\n");
-
-  const finesCSV = [row(["Member","Week","Goal","Final Fine","Override","Reason","Admin","Paid"]),
-    ...Object.values(fines).map(f => { const m=members.find(x=>x.id===f.memberId); const g=goals.find(x=>x.id===f.goalId); const paid=finePayments[`${f.memberId}__${f.weekKey}`]?.paid; return row([m?.name||"",f.weekKey||"",g?.name||"",(f.customAmount ?? f.amount) || "",f.overridden?"Yes":"No",f.overrideReason||"",f.overriddenBy||"",paid?"Yes":""]); })
-  ].join("\n");
-
-  const notesCSV = [row(["Member","Week","Note"]),
-    ...Object.values(weekNotes).map(n => { const m=members.find(x=>x.id===n.memberId); return row([m?.name||"",n.weekKey||"",n.text||""]); })
-  ].join("\n");
-
-  const monthsCSV = [row(["Month","Closed By","Closed At","Total Fines"]),
-    ...months.map(mo => row([mo.id,mo.closedBy||"",mo.closedAt||"",mo.totalFines||""]))
-  ].join("\n");
-
-  const today_ = new Date().toISOString().split("T")[0];
-  [["Members",membersCSV],["Goals",goalsCSV],["Activity",activityCSV],["Fines",finesCSV],["Notes",notesCSV],["Months",monthsCSV]].forEach(([name,csv]) => {
+  const dl = (name, csv) => {
     const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
-    const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`FitPact_${name}_${today_}.csv`;
+    const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`FitPact_${name}_${new Date().toISOString().split("T")[0]}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+
+  // Sheet 1: Weekly Activity Log — each member × goal × week
+  // Collect all unique weekKeys from dayLogs
+  const weekSet = new Set();
+  Object.keys(dayLogs).forEach(k => {
+    const d = k.split("__")[2];
+    if (d) {
+      try { weekSet.add(getWeekKey(new Date(d))); } catch {}
+    }
   });
+  const weekActivityRows = [];
+  members.forEach(m => {
+    goals.filter(g => g.memberId === m.id).forEach(g => {
+      const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+      [...weekSet].sort().forEach(wk => {
+        const wDates = getWeekDates(wk);
+        const dayEntries = wDates.map(date => dayLogs[`${m.id}__${g.id}__${date}`]);
+        const logged = dayEntries.filter(Boolean).length;
+        if (logged === 0) return; // skip weeks with no logs
+        const done = dayEntries.filter(e => e?.done || e?.value > 0).length;
+        const totalValue = dayEntries.reduce((s, e) => s + (e?.value || 0), 0);
+        const override = fines[`${m.id}__${wk}__${g.id}`];
+        const fine = override?.overridden ? (override.customAmount ?? 0) : (() => {
+          const finePerMiss = Number(g.fineAmount) || 0;
+          const target = Number(g.weeklyTarget) || 0;
+          if (cat.logType === "tick" || (g.logType === "tick")) return Math.max(0, target - done) * finePerMiss;
+          if ((g.direction || cat.direction) === "max") return Math.max(0, totalValue - target) * finePerMiss;
+          return totalValue < target ? finePerMiss : 0;
+        })();
+        const paid = finePayments[`${m.id}__${wk}`]?.paid ? "Yes" : fine > 0 ? "No" : "";
+        weekActivityRows.push(row([
+          m.name, g.name, cat.icon + " " + cat.label,
+          wk, wDates[0], wDates[6],
+          done, g.weeklyTarget, totalValue || done,
+          fine > 0 ? fine : "", override?.overridden ? "Yes" : "No",
+          override?.overrideReason || "", override?.overriddenBy || "",
+          paid
+        ]));
+      });
+    });
+  });
+  const weeklyCSV = [
+    row(["Member","Goal","Category","Week","Week Start","Week End","Days Done","Target","Total Value","Fine","Overridden","Override Reason","Override By","Paid"]),
+    ...weekActivityRows
+  ].join("\n");
+  dl("Weekly_Activity_Fines", weeklyCSV);
+
+  // Sheet 2: Monthly Rollup — member × goal × month
+  const monthSet = new Set();
+  Object.keys(dayLogs).forEach(k => { const d = k.split("__")[2]; if (d) monthSet.add(d.substring(0,7)); });
+  const monthlyRows = [];
+  members.forEach(m => {
+    goals.filter(g => g.memberId === m.id).forEach(g => {
+      const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+      [...monthSet].sort().forEach(mo => {
+        const moEntries = Object.keys(dayLogs)
+          .filter(k => k.startsWith(`${m.id}__${g.id}__`) && k.split("__")[2]?.startsWith(mo))
+          .map(k => dayLogs[k]);
+        if (!moEntries.length) return;
+        const done = moEntries.filter(e => e?.done || e?.value > 0).length;
+        const totalValue = moEntries.reduce((s,e) => s + (e?.value||0), 0);
+        // sum fines for this month
+        const moFines = Object.keys(fines)
+          .filter(k => { const f=fines[k]; return f.memberId===m.id && f.goalId===g.id && f.weekKey?.startsWith(mo); })
+          .reduce((s,k) => s + (fines[k].overridden ? (fines[k].customAmount??0) : 0), 0);
+        const mc = months.find(x => x.id === mo);
+        monthlyRows.push(row([m.name, g.name, cat.icon+" "+cat.label, mo, done, moEntries.length, totalValue||done, moFines||"", mc?.closedAt||"Auto", mc?.closedBy||""]));
+      });
+    });
+  });
+  const monthlyCSV = [
+    row(["Member","Goal","Category","Month","Days Done","Days Logged","Total Value","Fines","Month Closed At","Closed By"]),
+    ...monthlyRows
+  ].join("\n");
+  dl("Monthly_Rollup", monthlyCSV);
+
+  // Sheet 3: Fine payments summary
+  const paymentsCSV = [
+    row(["Member","Week","Fine Amount","Paid","Paid At","Marked By"]),
+    ...Object.values(finePayments).map(p => {
+      const m = members.find(x => x.id === p.memberId);
+      const wkFine = goals.filter(g => g.memberId === p.memberId).reduce((s,g) => {
+        const f = fines[`${p.memberId}__${p.weekKey}__${g.id}`];
+        return s + ((f?.overridden ? f.customAmount??0 : 0) || 0);
+      }, 0);
+      const paidAt = p.paidAt?.seconds ? new Date(p.paidAt.seconds*1000).toISOString().split("T")[0] : "";
+      return row([m?.name||"", p.weekKey||"", wkFine||"", p.paid?"Yes":"No", paidAt, p.markedBy||""]);
+    })
+  ].join("\n");
+  dl("Fine_Payments", paymentsCSV);
+
+  // Sheet 4: Week notes
+  if (Object.keys(weekNotes).length) {
+    const notesCSV = [row(["Member","Week","Note"]),
+      ...Object.values(weekNotes).filter(n => n.text).map(n => { const m=members.find(x=>x.id===n.memberId); return row([m?.name||"",n.weekKey||"",n.text||""]); })
+    ].join("\n");
+    dl("Week_Notes", notesCSV);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1392,20 +1562,83 @@ This CANNOT be undone.`)) return;
         {tab === "dashboard" && (
           <div>
             <DailyVibesCard />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
-              {[
-                { l: "Squad", v: members.length, c: C.lime },
-                { l: "This Week", v: `${leaderboard.filter(m => m.fine === 0).length} clean`, c: C.green },
-                { l: "Fines", v: `₹${leaderboard.reduce((s, m) => s + m.fine, 0).toLocaleString("en-IN")}`, c: leaderboard.reduce((s, m) => s + m.fine, 0) > 0 ? C.red : C.lime },
-              ].map(p => (
-                <div key={p.l} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px" }}>
-                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>{p.l}</div>
-                  <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 22, color: p.c, lineHeight: 1 }}>{p.v}</div>
-                </div>
-              ))}
-            </div>
 
-            <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 22, marginBottom: 10 }}>THIS WEEK — {weekKey}</div>
+            {/* ── MY ANALYTICS (personal card) ── */}
+            {myMember && (() => {
+              const myGoals = goals.filter(g => g.memberId === myMember.id && g.active !== false);
+              const myWeekFine = calcMemberWeekFine(myMember.id, weekKey);
+              const myMaxFine = calcMaxMemberFine(myMember.id);
+
+              // Month-to-date stats
+              const now = new Date();
+              const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+              const allDayLogKeys = Object.keys(dayLogs).filter(k => k.startsWith(`${myMember.id}__`));
+              const monthDone = allDayLogKeys.filter(k => {
+                const d = k.split("__")[2];
+                return d && new Date(d) >= monthStart && (dayLogs[k]?.done || dayLogs[k]?.value > 0);
+              }).length;
+              const monthTotal = allDayLogKeys.filter(k => {
+                const d = k.split("__")[2];
+                return d && new Date(d) >= monthStart;
+              }).length;
+
+              return (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 16, color: C.lime, letterSpacing: 1, marginBottom: 10 }}>
+                    MY ANALYTICS
+                  </div>
+
+                  {/* Week + Month stats */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+                    {[
+                      { l: "Week Fine", v: `₹${myWeekFine.toLocaleString("en-IN")}`, c: myWeekFine > 0 ? C.red : C.lime },
+                      { l: "Max/Wk", v: `₹${myMaxFine.toLocaleString("en-IN")}`, c: C.muted },
+                      { l: "MTD Done", v: monthTotal > 0 ? `${monthDone}/${monthTotal}` : "—", c: C.lime },
+                      { l: "MTD %", v: monthTotal > 0 ? `${Math.round((monthDone/monthTotal)*100)}%` : "—", c: monthDone/Math.max(monthTotal,1) > 0.7 ? C.lime : C.amber },
+                    ].map(p => (
+                      <div key={p.l} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 10px" }}>
+                        <div style={{ fontSize: 9, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>{p.l}</div>
+                        <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 18, color: p.c, lineHeight: 1 }}>{p.v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Per-goal this week */}
+                  {myGoals.map(goal => {
+                    const cat = GOAL_CATEGORIES.find(c => c.id === goal.category) || GOAL_CATEGORIES[8];
+                    const fine = getGoalFine(goal, weekKey);
+                    const maxFine = calcMaxGoalFine(goal);
+                    const doneDays = getDoneDays(goal, weekKey, dayLogs);
+                    const pct = maxFine > 0 ? Math.max(0, 100 - Math.round((fine/maxFine)*100)) : 100;
+                    const fClr = fine === 0 ? C.green : fine < maxFine * 0.5 ? C.amber : C.red;
+                    return (
+                      <div key={goal.id} style={{ background: "#0d0d0d", border: `1px solid ${fine > 0 ? "rgba(255,85,85,0.25)" : C.border}`, borderRadius: 9, padding: "9px 12px", marginBottom: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 16 }}>{cat.icon}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 600, fontSize: 12 }}>{goal.name}</div>
+                            <div style={{ fontSize: 10, color: C.muted }}>{doneDays}/{goal.weeklyTarget} {cat.defaultUnit} this week</div>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 13, color: fClr, fontWeight: 700 }}>
+                              {fine > 0 ? `₹${fine.toLocaleString("en-IN")}` : "✓"}
+                            </div>
+                          </div>
+                        </div>
+                        {maxFine > 0 && (
+                          <div style={{ marginTop: 6, height: 3, background: "#1a1a1a", borderRadius: 2, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${pct}%`, background: fClr, borderRadius: 2, transition: "width 0.4s" }} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* ── SQUAD THIS WEEK ── */}
+            <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 20, marginBottom: 10 }}>SQUAD — {weekKey}</div>
             {!members.length ? (
               <Card><div style={{ textAlign: "center", padding: "28px 0", color: C.muted }}>
                 <div style={{ fontSize: 36, marginBottom: 10 }}>👥</div>
@@ -1414,9 +1647,14 @@ This CANNOT be undone.`)) return;
               </div></Card>
             ) : leaderboard.map((m, rank) => {
               const RANK = ["🥇","🥈","🥉"];
+              const mGoalsAll = goals.filter(g => g.memberId === m.id && g.active !== false);
+
+              // Per-member week summary
+              const mDetails = getMemberWeekFineDetail(m.id, weekKey);
               return (
-                <Card key={m.id} highlight={rank === 0 && m.fine === 0} style={{ marginBottom: 8, cursor: "pointer" }}>
-                  <div className="hov" onClick={() => setMemberDetailOpen(m)} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <Card key={m.id} highlight={rank === 0 && m.fine === 0} style={{ marginBottom: 10 }}>
+                  {/* Header */}
+                  <div className="hov" onClick={() => setMemberDetailOpen(m)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: mGoalsAll.length ? 10 : 0 }}>
                     <div style={{ fontSize: 20, width: 28, flexShrink: 0 }}>{RANK[rank] || rank + 1}</div>
                     <Av name={m.name} emoji={m.emoji} idx={members.findIndex(x => x.id === m.id)} size={42} />
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -1428,6 +1666,19 @@ This CANNOT be undone.`)) return;
                       <div style={{ fontSize: 10, color: C.muted }}>{isWeekPaid(m.id, weekKey) ? "✅ paid" : m.fine > 0 ? "⏳ unpaid" : ""}</div>
                     </div>
                   </div>
+                  {/* Per-goal mini summary */}
+                  {mDetails.map(({ goal, fine, doneDays }) => {
+                    const cat = GOAL_CATEGORIES.find(c => c.id === goal.category) || GOAL_CATEGORIES[8];
+                    return (
+                      <div key={goal.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#0d0d0d", borderRadius: 6, marginBottom: 3, fontSize: 12 }}>
+                        <span style={{ color: C.text2 }}>{cat.icon} {goal.name}</span>
+                        <span style={{ color: C.muted, fontSize: 11 }}>{doneDays}/{goal.weeklyTarget}</span>
+                        <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: fine > 0 ? C.red : C.green, fontWeight: 600 }}>
+                          {fine > 0 ? `₹${fine.toLocaleString("en-IN")}` : "✓"}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </Card>
               );
             })}
@@ -2077,8 +2328,16 @@ This CANNOT be undone.`)) return;
               members={members}
               goals={goals}
               dayLogs={dayLogs}
+              fines={fines}
               activeMemberId={calendarMemberId || myMember?.id || members[0]?.id}
               onMemberChange={setCalendarMemberId}
+              onDateClick={(dateStr) => {
+                // Navigate to My Week showing the week containing this date
+                const wk = getWeekKey(new Date(dateStr));
+                const offset = Math.round((new Date(dateStr) - new Date()) / (7 * 24 * 60 * 60 * 1000));
+                setWeekOffset(Math.min(0, Math.round(offset)));
+                setTab("myweek");
+              }}
             />
           </div>
         )}
