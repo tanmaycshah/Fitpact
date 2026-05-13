@@ -19,6 +19,7 @@ import {
   listenActivity, postActivity,
   listenBanter, postBanter,
   listenMonths, saveMonth,
+  listenWeekNotes, saveWeekNote,
 } from "./db";
 import {
   COLORS, GOAL_CATEGORIES, HOBBY_SUGGESTIONS,
@@ -398,7 +399,7 @@ function WeekLogModal({ open, onClose, goal, weekKey, existingLog, memberName, o
 // ── HOBBY LOG MODAL ───────────────────────────────────────────────────────────
 
 // ── DAY LOG MODAL — tap a day dot to log that specific day ───────────────────
-function DayLogModal({ open, onClose, goal, date, existingLog, onSave }) {
+function DayLogModal({ open, onClose, goal, date, existingLog, onSave, isHistorical }) {
   const cat = GOAL_CATEGORIES.find(c => c.id === goal?.category) || GOAL_CATEGORIES[7];
   const isNumeric = (goal?.logType || cat.logType) === "number";
   const unit = goal?.customUnit || cat.defaultUnit;
@@ -425,15 +426,20 @@ function DayLogModal({ open, onClose, goal, date, existingLog, onSave }) {
     if (saving || ref.current) return;
     ref.current = true; setSaving(true);
     const data = isNumeric
-      ? { done: (parseFloat(value) || 0) > 0, value: parseFloat(value) || 0, note }
-      : { done, note };
+      ? { done: (parseFloat(value) || 0) > 0, value: parseFloat(value) || 0, note, ...(isHistorical ? { editedHistorically: true, editedAt: new Date().toISOString() } : {}) }
+      : { done, note, ...(isHistorical ? { editedHistorically: true, editedAt: new Date().toISOString() } : {}) };
     await onSave(data);
     setSaving(false);
   };
 
   return (
     <Modal open={open} title={`${goal.name?.toUpperCase()} — ${dayLabel.toUpperCase()}`} onClose={onClose} maxWidth={360}>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{cat.icon} Tap the day to mark done or missed</div>
+      {isHistorical && (
+        <div style={{ background: "rgba(255,184,0,0.08)", border: "1px solid rgba(255,184,0,0.2)", borderRadius: 8, padding: "7px 12px", marginBottom: 12, fontSize: 11, color: C.amber }}>
+          ✏️ Editing historical entry — will be flagged as edited
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{cat.icon} {isHistorical ? "Update past entry" : "Tap to mark done or missed"}</div>
 
       {isNumeric ? (
         <Fld label={`${unit} today`}>
@@ -782,6 +788,193 @@ function HobbyForm({ initial, members, onSave, onClose, isEdit, defaultMemberId 
   );
 }
 
+
+// ── WEEKLY NOTE SECTION ───────────────────────────────────────────────────────
+function WeeklyNoteSection({ initialNote, onSave }) {
+  const [text, setText] = useState(initialNote || "");
+  const [status, setStatus] = useState("idle"); // idle, saving, saved
+  const timerRef = useRef(null);
+  useEffect(() => { setText(initialNote || ""); }, [initialNote]);
+  const handleChange = (val) => {
+    setText(val); setStatus("idle");
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      setStatus("saving");
+      await onSave(val);
+      setStatus("saved");
+    }, 1200);
+  };
+  return (
+    <div style={{ marginTop: 20, background: "#0d0d0d", border: "1px solid #2a2a2a", borderRadius: 11, padding: "12px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "#666", textTransform: "uppercase", letterSpacing: 1 }}>📝 Week Notes</div>
+        <div style={{ fontSize: 10, color: status === "saving" ? "#ffb800" : status === "saved" ? "#00b894" : "#333" }}>
+          {status === "saving" ? "Saving..." : status === "saved" ? "Saved ✓" : "Auto-saves"}
+        </div>
+      </div>
+      <textarea value={text} onChange={e => handleChange(e.target.value)}
+        placeholder="Notes for this week, reminders for next week, anything on your mind... (optional)"
+        rows={3}
+        style={{ width: "100%", background: "transparent", border: "none", color: "#f0ede6", fontFamily: "'DM Sans',sans-serif", fontSize: 13, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
+    </div>
+  );
+}
+
+// ── MONTHLY CALENDAR ──────────────────────────────────────────────────────────
+function MonthlyCalendar({ members, goals, dayLogs, activeMemberId, onMemberChange }) {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const [selDay, setSelDay] = useState(null);
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const todayStr = today();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDow = (new Date(year, month, 1).getDay() + 6) % 7;
+  const pad = n => String(n).padStart(2,"0");
+  const ds = day => `${year}-${pad(month+1)}-${pad(day)}`;
+
+  const getDayStatus = (day) => {
+    if (!activeMemberId) return "empty";
+    const d = ds(day);
+    if (d > todayStr) return "future";
+    const mGoals = goals.filter(g => g.memberId === activeMemberId && g.active !== false);
+    if (!mGoals.length) return "empty";
+    let done = 0;
+    mGoals.forEach(g => { const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`]; if (dl?.done || dl?.value > 0) done++; });
+    if (done === 0) return "none";
+    if (done < mGoals.length) return "partial";
+    return "full";
+  };
+
+  const ST = {
+    full:    { border: "2px solid #c8f53b",          color: "#c8f53b",  bg: "rgba(200,245,59,0.12)" },
+    partial: { border: "2px solid #ffb800",           color: "#ffb800",  bg: "rgba(255,184,0,0.08)" },
+    none:    { border: "2px solid rgba(255,85,85,0.5)", color: "#ff5555", bg: "rgba(255,85,85,0.06)" },
+    future:  { border: "1px solid #1a1a1a",           color: "#333",     bg: "transparent" },
+    empty:   { border: "1px solid #2a2a2a",           color: "#555",     bg: "transparent" },
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 14, paddingBottom: 2 }}>
+        {members.map((m, idx) => {
+          const active = activeMemberId === m.id;
+          return (
+            <button key={m.id} onClick={() => { onMemberChange(m.id); setSelDay(null); }}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, flexShrink: 0, cursor: "pointer", border: `1px solid ${active ? "#c8f53b" : "#2a2a2a"}`, background: active ? "rgba(200,245,59,0.1)" : "#111" }}>
+              <span style={{ fontSize: 14 }}>{m.emoji || m.name[0]}</span>
+              <span style={{ fontSize: 12, fontWeight: active ? 700 : 400, color: active ? "#c8f53b" : "#666" }}>{m.name.split(" ")[0]}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <button onClick={() => { if (month === 0) { setMonth(11); setYear(y=>y-1); } else setMonth(m=>m-1); }}
+          style={{ background: "#111", border: "1px solid #2a2a2a", color: "#f0ede6", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 16 }}>‹</button>
+        <div style={{ flex: 1, textAlign: "center", fontFamily: "'Bebas Neue',cursive", fontSize: 22, color: "#c8f53b", letterSpacing: 1 }}>{MONTHS[month]} {year}</div>
+        <button onClick={() => { if (month === 11) { setMonth(0); setYear(y=>y+1); } else setMonth(m=>m+1); }}
+          style={{ background: "#111", border: "1px solid #2a2a2a", color: "#f0ede6", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 16 }}>›</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3, marginBottom: 6 }}>
+        {["M","T","W","T","F","S","S"].map((d,i) => <div key={i} style={{ textAlign: "center", fontSize: 10, color: "#555", fontWeight: 700, padding: "3px 0" }}>{d}</div>)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+        {Array.from({ length: firstDow }).map((_,i) => <div key={`e${i}`} />)}
+        {Array.from({ length: daysInMonth },(_,i)=>i+1).map(day => {
+          const st = getDayStatus(day);
+          const s = ST[st];
+          const isToday = ds(day) === todayStr;
+          const isSel = selDay === day;
+          return (
+            <button key={day}
+              onClick={() => st !== "future" && activeMemberId && setSelDay(selDay===day ? null : day)}
+              style={{ aspectRatio: "1", borderRadius: "50%", border: isToday ? "2.5px solid #c8f53b" : s.border, background: isSel ? "rgba(200,245,59,0.2)" : s.bg, color: isToday ? "#c8f53b" : s.color, fontSize: 12, fontWeight: isToday ? 700 : 400, cursor: st !== "future" && activeMemberId ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {day}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
+        {[["#c8f53b","All done"],["#ffb800","Partial"],["rgba(255,85,85,0.7)","Missed"],["#555","Not logged"]].map(([clr,lbl]) => (
+          <div key={lbl} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#666" }}>
+            <div style={{ width: 10, height: 10, borderRadius: "50%", border: `2px solid ${clr}` }} />{lbl}
+          </div>
+        ))}
+      </div>
+      {selDay && activeMemberId && (() => {
+        const d = ds(selDay);
+        const mGoals = goals.filter(g => g.memberId === activeMemberId && g.active !== false);
+        return (
+          <div style={{ marginTop: 14, background: "#0d0d0d", border: "1px solid #2a2a2a", borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 16, color: "#c8f53b", marginBottom: 10 }}>{MONTHS[month].slice(0,3)} {selDay} — DETAILS</div>
+            {mGoals.map(g => {
+              const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+              const dl = dayLogs[`${activeMemberId}__${g.id}__${d}`];
+              return (
+                <div key={g.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#111", borderRadius: 7, marginBottom: 4, fontSize: 13 }}>
+                  <span>{cat.icon} {g.name}</span>
+                  <span style={{ color: dl?.done||dl?.value>0 ? "#c8f53b" : dl ? "#ff5555" : "#444" }}>
+                    {dl ? (dl.done ? "✅" : dl.value>0 ? `${dl.value} ${cat.defaultUnit}` : "❌") : "—"}
+                    {dl?.editedHistorically && <span style={{ color:"#ffb800",marginLeft:4,fontSize:10 }}>✎ edited</span>}
+                    {dl?.note && <span style={{ color:"#666",marginLeft:4,fontSize:10 }}>· {dl.note}</span>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ── EXCEL / CSV EXPORT ────────────────────────────────────────────────────────
+function exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, months }) {
+  const esc = v => { if (v == null) return ''; const s = String(v); if (s.includes(',') || s.includes('"')) return '"' + s.replaceAll('"', '""') + '"'; return s; };
+  const row = arr => arr.map(esc).join(",");
+
+  const membersCSV = [row(["Name","Weight(kg)","Height(cm)","DOB","Fitness Goal"]),
+    ...members.map(m => row([m.name,m.weight||"",m.height||"",m.dob||"",m.fitnessGoal||""]))
+  ].join("\n");
+
+  const goalsCSV = [row(["Member","Goal","Category","Type","Weekly Target","Fine/Miss","Status"]),
+    ...goals.map(g => { const m=members.find(x=>x.id===g.memberId); return row([m?.name||"",g.name,g.category,g.goalType||"ongoing",g.weeklyTarget,g.fineAmount,g.active===false?"archived":"active"]); })
+  ].join("\n");
+
+  const logRows = {};
+  Object.keys(dayLogs).forEach(k => {
+    const pts = k.split("__"); if (pts.length<3) return;
+    const [mid,gid,date] = pts;
+    const mo = date.substring(0,7);
+    const key = `${mid}||${gid}||${mo}`;
+    if (!logRows[key]) logRows[key]={mid,gid,mo,done:0,total:0};
+    logRows[key].total++;
+    if (dayLogs[k]?.done || dayLogs[k]?.value>0) logRows[key].done++;
+  });
+  const activityCSV = [row(["Member","Goal","Month","Days Done","Days Total"]),
+    ...Object.values(logRows).map(r => { const m=members.find(x=>x.id===r.mid); const g=goals.find(x=>x.id===r.gid); return row([m?.name||r.mid,g?.name||r.gid,r.mo,r.done,r.total]); })
+  ].join("\n");
+
+  const finesCSV = [row(["Member","Week","Goal","Final Fine","Override","Reason","Admin","Paid"]),
+    ...Object.values(fines).map(f => { const m=members.find(x=>x.id===f.memberId); const g=goals.find(x=>x.id===f.goalId); const paid=finePayments[`${f.memberId}__${f.weekKey}`]?.paid; return row([m?.name||"",f.weekKey||"",g?.name||"",(f.customAmount ?? f.amount) || "",f.overridden?"Yes":"No",f.overrideReason||"",f.overriddenBy||"",paid?"Yes":""]); })
+  ].join("\n");
+
+  const notesCSV = [row(["Member","Week","Note"]),
+    ...Object.values(weekNotes).map(n => { const m=members.find(x=>x.id===n.memberId); return row([m?.name||"",n.weekKey||"",n.text||""]); })
+  ].join("\n");
+
+  const monthsCSV = [row(["Month","Closed By","Closed At","Total Fines"]),
+    ...months.map(mo => row([mo.id,mo.closedBy||"",mo.closedAt||"",mo.totalFines||""]))
+  ].join("\n");
+
+  const today_ = new Date().toISOString().split("T")[0];
+  [["Members",membersCSV],["Goals",goalsCSV],["Activity",activityCSV],["Fines",finesCSV],["Notes",notesCSV],["Months",monthsCSV]].forEach(([name,csv]) => {
+    const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+    const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`FitPact_${name}_${today_}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  });
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════════════════════
@@ -802,6 +995,7 @@ export default function App() {
   const [activity, setActivity] = useState([]);
   const [banter, setBanter] = useState([]);
   const [months, setMonths] = useState([]);
+  const [weekNotes, setWeekNotes] = useState({});
   const [settings, setSettings] = useState({ groupName: "FitPact Squad", appUrl: "fitpact-xi.vercel.app", adminPin: "1234", startDate: new Date().toISOString() });
   const [users, setUsers] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -832,8 +1026,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [banterOpen, setBanterOpen] = useState(false);
   const [banterText, setBanterText] = useState("");
-  const [monthCloseOpen, setMonthCloseOpen] = useState(false);
   const [memberDetailOpen, setMemberDetailOpen] = useState(null);
+  const [calendarMemberId, setCalendarMemberId] = useState(null);
 
   const weekKey = (() => {
     if (weekOffset === 0) return currentWeekKey();
@@ -889,6 +1083,7 @@ export default function App() {
       listenActivity(setActivity),
       listenBanter(setBanter),
       listenMonths(setMonths),
+      listenWeekNotes(setWeekNotes),
     ];
     return () => unsubs.forEach(u => u());
   }, [authUser]);
@@ -1061,21 +1256,26 @@ This CANNOT be undone.`)) return;
     await postActivity({ type: "member_joined", memberName: members.find(m => m.id === approveMemberId)?.name || approveModal.email });
   };
 
-  const handleCloseMonth = async () => {
+  // Auto-close month on 1st of new month (runs once when data loads)
+  useEffect(() => {
+    if (!isAdmin || !members.length || !goals.length) return;
     const mk = getMonthKey();
-    await saveMonth(mk, {
-      closedAt: new Date().toISOString(),
-      closedBy: myMember?.name || "Admin",
-      totalFines: members.reduce((s, m) => s + calcMemberWeekFine(m.id, weekKey), 0),
-    });
-    // carry forward ongoing goals — they stay active automatically
-    // deactivate monthly goals
-    const monthlyGoals = goals.filter(g => g.goalType === "monthly" && g.active);
-    await Promise.all(monthlyGoals.map(g => saveGoal(g.id, { ...g, active: false, archivedAt: new Date().toISOString() })));
-    setMonthCloseOpen(false);
-    showToast("Month closed! Ongoing goals carried forward 🔄");
-    await postActivity({ type: "month_closed", closedBy: myMember?.name || "Admin", monthKey: mk });
-  };
+    const alreadyClosed = months.some(m => m.id === mk);
+    if (alreadyClosed) return;
+    // Check if we're in a new month (compare to last closed month)
+    const lastClosed = months[0]?.id;
+    if (!lastClosed || lastClosed < mk) {
+      // It's a new month — auto-archive monthly goals and record
+      const monthlyGoals = goals.filter(g => g.goalType === "monthly" && g.active);
+      const totalF = members.reduce((s, m) => s + calcMemberWeekFine(m.id, weekKey), 0);
+      saveMonth(mk, { closedAt: new Date().toISOString(), closedBy: "Auto", totalFines: totalF, startDate: new Date().toISOString() });
+      monthlyGoals.forEach(g => saveGoal(g.id, { ...g, active: false, archivedAt: new Date().toISOString() }));
+      if (monthlyGoals.length > 0) {
+        postActivity({ type: "month_closed", closedBy: "Auto", monthKey: mk });
+        showToast("New month started! Monthly goals archived 🔄");
+      }
+    }
+  }, [isAdmin, months.length, members.length, goals.length]);
 
   const handleBanter = async () => {
     if (!banterText.trim()) return;
@@ -1178,7 +1378,7 @@ This CANNOT be undone.`)) return;
 
       {/* ── TABS ── */}
       <div style={{ display: "flex", gap: 2, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, overflowX: "auto", background: C.bg, position: "sticky", top: 57, zIndex: 99 }}>
-        {[["dashboard","📊","Board"],["myweek","📋","My Week"],["squad","👥","Squad"],["fines","💸","Fines"],["hobbies","🎸","Hobbies"],["history","🏆","History"],["feed","📡","Feed"],["banter","🗣️","Banter"],["members","⚙️","Members"]].map(([id, icon, lbl]) => (
+        {[["dashboard","📊","Board"],["myweek","📋","My Week"],["squad","👥","Squad"],["fines","💸","Fines"],["hobbies","🎸","Hobbies"],["leaderboard","🏆","Board"],["calendar","📅","Calendar"],["feed","📡","Feed"],["banter","🗣️","Banter"],["members","⚙️","Members"]].map(([id, icon, lbl]) => (
           <button key={id} className={`tab-b ${tab === id ? "on" : ""}`} onClick={() => { setTab(id); if (id !== "myweek") setWeekOffset(0); }}>
             <span style={{ fontSize: 16 }}>{icon}</span>
             <span>{lbl}</span>
@@ -1418,7 +1618,7 @@ This CANNOT be undone.`)) return;
                                 if (isMissed) { bg = "rgba(255,85,85,0.1)"; border = "rgba(255,85,85,0.4)"; textClr = C.red; }
                                 if (isFuture) { bg = "#0a0a0a"; border = "#1a1a1a"; textClr = "#333"; }
 
-                                const canTap = isCurrentWeek && !isFuture;
+                                const canTap = !isFuture; // anyone can edit past entries
                                 // grey-out unlogged days in past weeks
                                 if (!isCurrentWeek && !isLogged && !isFuture) {
                                   textClr = "#444"; border = "#222";
@@ -1427,12 +1627,12 @@ This CANNOT be undone.`)) return;
                                   <button key={date}
                                     disabled={!canTap}
                                     onClick={() => canTap && setDayLogModal({ goal, date, log: dl || null, memberId: activeMem.id })}
-                                    title={!canTap && !isFuture ? "Historical — read only" : ""}
+                                    title={isFuture ? "Future date" : isCurrentWeek ? "Tap to log" : "Tap to edit"}
                                     style={{ aspectRatio: "1", borderRadius: 8, border: `1.5px solid ${border}`, background: bg, color: textClr, fontSize: 11, fontWeight: 700, cursor: canTap ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, padding: 2 }}>
                                     <span style={{ fontSize: 10 }}>{getDayLabel(date)[0]}</span>
                                     {hasValue && <span style={{ fontSize: 8 }}>{dl.value}</span>}
-                                    {isLogged && !hasValue && <span style={{ fontSize: 8 }}>✓</span>}
-                                    {isMissed && <span style={{ fontSize: 8 }}>✕</span>}
+                                    {isLogged && !hasValue && <span style={{ fontSize: 8 }}>{dl?.editedHistorically ? "✎" : "✓"}</span>}
+                                    {isMissed && <span style={{ fontSize: 8 }}>{dl?.editedHistorically ? "✎" : "✕"}</span>}
                                     {!isCurrentWeek && !isLogged && !isFuture && <span style={{ fontSize: 8 }}>—</span>}
                                   </button>
                                 );
@@ -1470,6 +1670,18 @@ This CANNOT be undone.`)) return;
                       })}
                     </>
                   )}
+                  {/* Weekly Notes */}
+                  {(() => {
+                    const noteKey = `${activeMem.id}__${weekKey}`;
+                    const existingNote = weekNotes[noteKey]?.text || "";
+                    return (
+                      <WeeklyNoteSection
+                        key={noteKey}
+                        initialNote={existingNote}
+                        onSave={async (text) => { await saveWeekNote(activeMem.id, weekKey, text); showToast("Note saved ✅"); }}
+                      />
+                    );
+                  })()}
                 </>
               );
             })()}
@@ -1694,23 +1906,35 @@ This CANNOT be undone.`)) return;
           </div>
         )}
 
-        {/* ════ HISTORY ════ */}
-        {tab === "history" && (
+        {/* ════ LEADERBOARD ════ */}
+        {tab === "leaderboard" && (
           <div>
-            <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24, marginBottom: 6 }}>ALL-TIME LEADERBOARD</div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>Cumulative fines since start</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24 }}>LEADERBOARD</div>
+              {isAdmin && (
+                <button onClick={() => exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, months })}
+                  style={{ background: "rgba(200,245,59,0.1)", border: "1px solid rgba(200,245,59,0.3)", color: C.lime, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                  📥 Export CSV
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>All-time fines · auto-resets each month</div>
             {members.map((m, idx) => {
-              const allFine = Object.keys(weekLogs)
-                .filter(k => k.startsWith(`${m.id}__`))
-                .reduce((sum, k) => {
-                  const [, goalId] = k.split("__");
-                  const wk = k.split("__")[2];
-                  const goal = goals.find(g => g.id === goalId);
-                  const override = fines[`${m.id}__${wk}__${goalId}`];
-                  if (!goal || override?.overridden) return sum;
-                  // all-time fine uses calcFine with empty dayLogs for that week
-                  return sum + calcFine({ goal, weekKey: k.split("__")[2], dayLogs, override: null });
-                }, 0);
+              // All-time fine: sum all dayLog-based fines across all weeks
+              const memberGoalIds = goals.filter(g => g.memberId === m.id).map(g => g.id);
+              const allWeekKeys = [...new Set(
+                Object.keys(dayLogs)
+                  .filter(k => k.startsWith(`${m.id}__`))
+                  .map(k => { const d = k.split("__")[2]; return d ? getWeekKey(new Date(d)) : null; })
+                  .filter(Boolean)
+              )];
+              const allFine = allWeekKeys.reduce((wSum, wk) => {
+                return wSum + goals.filter(g => g.memberId === m.id && g.active !== false)
+                  .reduce((gSum, g) => {
+                    const override = fines[`${m.id}__${wk}__${g.id}`];
+                    return gSum + calcFine({ goal: g, weekKey: wk, dayLogs, override });
+                  }, 0);
+              }, 0);
               const paidTotal = Object.keys(finePayments)
                 .filter(k => k.startsWith(`${m.id}__`) && finePayments[k]?.paid)
                 .reduce((sum, k) => {
@@ -1733,11 +1957,7 @@ This CANNOT be undone.`)) return;
                 </Card>
               );
             })}
-            {isAdmin && (
-              <button onClick={() => setMonthCloseOpen(true)} style={{ ...mkBP(false, C.amber), width: "100%", justifyContent: "center", marginTop: 16 }}>
-                🔄 Close This Month
-              </button>
-            )}
+
             {months.length > 0 && (
               <div style={{ marginTop: 20 }}>
                 <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 20, marginBottom: 10 }}>PAST MONTHS</div>
@@ -1849,6 +2069,20 @@ This CANNOT be undone.`)) return;
         )}
 
         {/* ════ BANTER ════ */}
+        {/* ════ CALENDAR ════ */}
+        {tab === "calendar" && (
+          <div style={{ animation: "slideIn .2s ease" }}>
+            <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24, marginBottom: 14 }}>MONTHLY CALENDAR</div>
+            <MonthlyCalendar
+              members={members}
+              goals={goals}
+              dayLogs={dayLogs}
+              activeMemberId={calendarMemberId || myMember?.id || members[0]?.id}
+              onMemberChange={setCalendarMemberId}
+            />
+          </div>
+        )}
+
         {tab === "banter" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -1948,7 +2182,7 @@ This CANNOT be undone.`)) return;
 
       {/* ══ MODALS ══ */}
       <WeekLogModal open={!!weekLogModal} onClose={() => setWeekLogModal(null)} goal={weekLogModal?.goal} weekKey={weekLogModal?.weekKey} existingLog={weekLogModal?.log} memberName={myMember?.name} onSave={handleWeekLog} />
-      <DayLogModal open={!!dayLogModal} onClose={() => setDayLogModal(null)} goal={dayLogModal?.goal} date={dayLogModal?.date} existingLog={dayLogModal?.log} onSave={handleDayLog} />
+      <DayLogModal open={!!dayLogModal} onClose={() => setDayLogModal(null)} goal={dayLogModal?.goal} date={dayLogModal?.date} existingLog={dayLogModal?.log} onSave={handleDayLog} isHistorical={dayLogModal?.date < today()} />
       <HobbyLogModal open={!!hobbyLogModal} onClose={() => setHobbyLogModal(null)} hobby={hobbyLogModal?.hobby} weekKey={hobbyLogModal?.weekKey} existingLog={hobbyLogModal?.log} onSave={handleHobbyLog} />
       <OverrideModal open={!!overrideModal} onClose={() => setOverrideModal(null)} rawFine={overrideModal?.rawFine} memberName={overrideModal?.memberName} goalName={overrideModal?.goalName} onSave={handleOverride} />
 
@@ -2066,22 +2300,7 @@ This CANNOT be undone.`)) return;
       </Modal>
 
       {/* Month Close */}
-      <Modal open={monthCloseOpen} title="CLOSE THIS MONTH" onClose={() => setMonthCloseOpen(false)} maxWidth={400}>
-        <div style={{ fontSize: 14, color: C.text2, marginBottom: 14, lineHeight: 1.6 }}>
-          Closing the month will:<br />
-          ✅ Archive all monthly challenge goals<br />
-          ✅ Carry forward all ongoing goals automatically<br />
-          ✅ Save a historical record of this month's fines<br />
-          ✅ Start fresh for next month
-        </div>
-        <div style={{ background: "rgba(255,184,0,0.08)", border: "1px solid rgba(255,184,0,0.2)", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: C.amber }}>
-          ⚠️ This cannot be undone. Ongoing goals will continue as-is.
-        </div>
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button style={BO} onClick={() => setMonthCloseOpen(false)}>Cancel</button>
-          <button style={mkBP(false, C.amber)} onClick={handleCloseMonth}>Close Month →</button>
-        </div>
-      </Modal>
+      {/* Month closes automatically on 1st of each month */}
 
       {/* Settings */}
       <Modal open={settingsOpen} title="SETTINGS" onClose={() => setSettingsOpen(false)}>

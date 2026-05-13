@@ -1,22 +1,8 @@
 import { db } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, updateDoc,
-  deleteDoc, query, orderBy, where, serverTimestamp, getDoc
+  deleteDoc, query, orderBy, serverTimestamp, getDoc
 } from "firebase/firestore";
-
-// ── COLLECTIONS ───────────────────────────────────────────────────────────────
-// users/{uid}         auth + linked memberId + isAdmin + isPending
-// members/{id}        profile
-// goals/{id}          fitness goals (ongoing or monthly)
-// hobbies/{id}        hobby commitments
-// weekLogs/{id}       weekly check-in logs (memberId__goalId__YYYY-Www)
-// hobbyLogs/{id}      weekly hobby logs (memberId__hobbyId__YYYY-Www)
-// fines/{id}          fine records (memberId__YYYY-Www)
-// finepayments/{id}   payment records
-// months/{YYYY-MM}    monthly cycle config
-// activity/{id}       activity feed
-// banter/{id}         squad banter
-// settings/main       group config
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 export function listenSettings(cb) {
@@ -74,8 +60,16 @@ export async function saveHobby(id, data) {
 }
 export async function deleteHobby(id) { await deleteDoc(doc(db, "hobbies", id)); }
 
+// ── DAY LOGS ──────────────────────────────────────────────────────────────────
+export function listenDayLogs(cb) {
+  return onSnapshot(collection(db, "dayLogs"), snap => {
+    const logs = {};
+    snap.docs.forEach(d => { logs[d.id] = d.data(); });
+    cb(logs);
+  });
+}
+
 // ── WEEK LOGS ─────────────────────────────────────────────────────────────────
-// id: memberId__goalId__YYYY-Www
 export function listenWeekLogs(cb) {
   return onSnapshot(collection(db, "weekLogs"), s => {
     const logs = {};
@@ -86,16 +80,6 @@ export function listenWeekLogs(cb) {
 export async function saveWeekLog(memberId, goalId, weekKey, data) {
   const id = `${memberId}__${goalId}__${weekKey}`;
   await setDoc(doc(db, "weekLogs", id), { memberId, goalId, weekKey, ...data, updatedAt: serverTimestamp() }, { merge: true });
-}
-
-
-// ── DAY LOGS ──────────────────────────────────────────────────────────────────
-export function listenDayLogs(cb) {
-  return onSnapshot(collection(db, "dayLogs"), snap => {
-    const logs = {};
-    snap.docs.forEach(d => { logs[d.id] = d.data(); });
-    cb(logs);
-  });
 }
 
 // ── HOBBY LOGS ────────────────────────────────────────────────────────────────
@@ -144,14 +128,23 @@ export function listenFinePayments(cb) {
 }
 export async function markFinePaid(memberId, weekKey, paidBy) {
   const id = `${memberId}__${weekKey}`;
-  await setDoc(doc(db, "finePayments", id), {
-    memberId, weekKey, paid: true,
-    paidAt: serverTimestamp(), markedBy: paidBy,
-  }, { merge: true });
+  await setDoc(doc(db, "finePayments", id), { memberId, weekKey, paid: true, paidAt: serverTimestamp(), markedBy: paidBy }, { merge: true });
 }
 export async function markFineUnpaid(memberId, weekKey) {
+  await setDoc(doc(db, "finePayments", `${memberId}__${weekKey}`), { paid: false }, { merge: true });
+}
+
+// ── WEEK NOTES ────────────────────────────────────────────────────────────────
+export function listenWeekNotes(cb) {
+  return onSnapshot(collection(db, "weekNotes"), s => {
+    const notes = {};
+    s.docs.forEach(d => { notes[d.id] = d.data(); });
+    cb(notes);
+  });
+}
+export async function saveWeekNote(memberId, weekKey, text) {
   const id = `${memberId}__${weekKey}`;
-  await setDoc(doc(db, "finePayments", id), { paid: false }, { merge: true });
+  await setDoc(doc(db, "weekNotes", id), { memberId, weekKey, text, updatedAt: serverTimestamp() }, { merge: true });
 }
 
 // ── ACTIVITY FEED ─────────────────────────────────────────────────────────────
@@ -170,8 +163,7 @@ export function listenBanter(cb) {
     cb(s.docs.map(d => ({ id: d.id, ...d.data() }))));
 }
 export async function postBanter(data) {
-  const id = `b_${Date.now()}`;
-  await setDoc(doc(db, "banter", id), { ...data, createdAt: serverTimestamp() });
+  await setDoc(doc(db, "banter", `b_${Date.now()}`), { ...data, createdAt: serverTimestamp() });
 }
 
 // ── MONTHS ────────────────────────────────────────────────────────────────────
