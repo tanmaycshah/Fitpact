@@ -1177,6 +1177,215 @@ function exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, m
   });
 }
 
+
+// ── SCORES DRILL-DOWN ─────────────────────────────────────────────────────────
+function ScoresDrillDown({ years, sortedMonths, members, goals, dayLogs, fines, finePayments,
+  getMemberMonthFine, getGoalMonthDetail, isAdmin, myMember, onMarkPaid, onOverride }) {
+
+  const [selYear, setSelYear] = useState(years[0] || "");
+  const [selMonth, setSelMonth] = useState("");
+  const [expandedMember, setExpandedMember] = useState(null);
+
+  const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  // months for selected year
+  const monthsForYear = sortedMonths.filter(m => m.startsWith(selYear));
+
+  // When year changes, reset month
+  const handleYearChange = (y) => { setSelYear(y); setSelMonth(""); setExpandedMember(null); };
+  const handleMonthChange = (m) => { setSelMonth(m); setExpandedMember(null); };
+
+  return (
+    <div>
+      {/* Year pills */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Year</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {years.map(y => (
+            <button key={y} onClick={() => handleYearChange(y)}
+              style={{ padding: "7px 18px", borderRadius: 20, border: `1px solid ${selYear===y ? "#c8f53b" : "#2a2a2a"}`, background: selYear===y ? "rgba(200,245,59,0.1)" : "#111", color: selYear===y ? "#c8f53b" : "#888", fontWeight: selYear===y ? 700 : 400, fontSize: 14, cursor: "pointer", fontFamily: "'Bebas Neue',cursive", letterSpacing: 1 }}>
+              {y}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Month pills */}
+      {selYear && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Month</div>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+            {monthsForYear.map(mo => {
+              const moName = MONTH_NAMES[parseInt(mo.split("-")[1])-1];
+              const moTotal = members.reduce((s,m) => s + getMemberMonthFine(m.id, mo), 0);
+              return (
+                <button key={mo} onClick={() => handleMonthChange(selMonth===mo ? "" : mo)}
+                  style={{ padding: "7px 14px", borderRadius: 10, border: `1px solid ${selMonth===mo ? "#c8f53b" : "#2a2a2a"}`, background: selMonth===mo ? "rgba(200,245,59,0.1)" : "#111", cursor: "pointer", textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 16, color: selMonth===mo ? "#c8f53b" : "#f0ede6", letterSpacing: 1 }}>{moName}</div>
+                  {moTotal > 0 && <div style={{ fontSize: 9, color: "#ff5555", fontFamily: "'DM Mono',monospace" }}>₹{moTotal.toLocaleString("en-IN")}</div>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Members for selected month */}
+      {selMonth && (() => {
+        const moName = MONTH_NAMES[parseInt(selMonth.split("-")[1])-1];
+        const moTotal = members.reduce((s,m) => s + getMemberMonthFine(m.id, selMonth), 0);
+        const moPaid = members.reduce((s,m) => {
+          const memberPaid = Object.keys(finePayments)
+            .filter(k => k.startsWith(`${m.id}__`) && finePayments[k]?.paid)
+            .reduce((ps, k) => {
+              const wk = k.split("__")[1];
+              if (!wk?.includes(selMonth.replace("-","W").substring(0,7))) return ps;
+              return ps + getMemberMonthFine(m.id, selMonth);
+            }, 0);
+          return s + memberPaid;
+        }, 0);
+
+        return (
+          <div>
+            {/* Month header */}
+            <div style={{ background: "rgba(200,245,59,0.05)", border: "1px solid rgba(200,245,59,0.2)", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+              <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 20, color: "#c8f53b", letterSpacing: 1, marginBottom: 4 }}>
+                {moName} {selYear}
+              </div>
+              <div style={{ display: "flex", gap: 20, fontSize: 12 }}>
+                <span style={{ color: "#ff5555" }}>Total fines: <b>₹{moTotal.toLocaleString("en-IN")}</b></span>
+                <span style={{ color: "#00b894" }}>Paid: <b>₹{moPaid.toLocaleString("en-IN")}</b></span>
+                <span style={{ color: "#888" }}>Unpaid: <b>₹{Math.max(0, moTotal-moPaid).toLocaleString("en-IN")}</b></span>
+              </div>
+            </div>
+
+            {/* Each member */}
+            {members.map((m, idx) => {
+              const mFine = getMemberMonthFine(m.id, selMonth);
+              const mGoals = goals.filter(g => g.memberId === m.id && g.active !== false);
+              const isExpanded = expandedMember === m.id;
+
+              // Collect all weeks in this month for this member
+              const memberWeeks = [...new Set(
+                Object.keys(dayLogs)
+                  .filter(k => k.startsWith(`${m.id}__`) && k.split("__")[2]?.startsWith(selMonth))
+                  .map(k => { try { return getWeekKey(new Date(k.split("__")[2])); } catch { return null; } })
+                  .filter(Boolean)
+              )].sort();
+
+              // Check if any week is paid
+              const anyPaid = memberWeeks.some(wk => finePayments[`${m.id}__${wk}`]?.paid);
+              const allPaid = memberWeeks.length > 0 && memberWeeks.every(wk => finePayments[`${m.id}__${wk}`]?.paid);
+
+              return (
+                <div key={m.id} style={{ background: "#111", border: `1px solid ${mFine > 0 ? (allPaid ? "rgba(0,184,148,0.3)" : "rgba(255,85,85,0.3)") : "#1e1e1e"}`, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+                  {/* Member row — tap to expand */}
+                  <div onClick={() => setExpandedMember(isExpanded ? null : m.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", cursor: "pointer" }}>
+                    <Av name={m.name} emoji={m.emoji} idx={idx} size={38} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</div>
+                      <div style={{ fontSize: 11, color: "#666" }}>{mGoals.length} goals · {memberWeeks.length} week{memberWeeks.length!==1?"s":""} logged</div>
+                    </div>
+                    <div style={{ textAlign: "right", marginRight: 6 }}>
+                      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 16, fontWeight: 700, color: mFine===0 ? "#c8f53b" : allPaid ? "#00b894" : "#ff5555" }}>
+                        ₹{mFine.toLocaleString("en-IN")}
+                      </div>
+                      {mFine > 0 && <div style={{ fontSize: 9, color: allPaid ? "#00b894" : "#ff5555" }}>{allPaid ? "PAID ✓" : anyPaid ? "PART PAID" : "UNPAID"}</div>}
+                    </div>
+                    <div style={{ color: "#555", fontSize: 14 }}>{isExpanded ? "▲" : "▼"}</div>
+                  </div>
+
+                  {/* Expanded: per-goal, per-week breakdown */}
+                  {isExpanded && (
+                    <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 14px" }}>
+                      {/* Per-week paid toggle */}
+                      {mFine > 0 && memberWeeks.length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{ fontSize: 10, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Week-by-week payment</div>
+                          {memberWeeks.map(wk => {
+                            const wkFine = goals.filter(g=>g.memberId===m.id&&g.active!==false)
+                              .reduce((s,g)=>s+calcFine({goal:g,weekKey:wk,dayLogs,override:fines[`${m.id}__${wk}__${g.id}`]}),0);
+                            const wkPaid = finePayments[`${m.id}__${wk}`]?.paid;
+                            const wDates = getWeekDates(wk);
+                            return (
+                              <div key={wk} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#0d0d0d", borderRadius: 8, marginBottom: 6 }}>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 600 }}>{wk}</div>
+                                  <div style={{ fontSize: 10, color: "#666" }}>{formatDate(wDates[0])} – {formatDate(wDates[6])}</div>
+                                </div>
+                                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 13, color: wkFine>0 ? (wkPaid?"#00b894":"#ff5555") : "#c8f53b", fontWeight: 700 }}>
+                                  ₹{wkFine.toLocaleString("en-IN")}
+                                </div>
+                                {wkFine > 0 && isAdmin && (
+                                  <button onClick={e => { e.stopPropagation(); onMarkPaid(m.id, wk, !wkPaid); }}
+                                    style={{ fontSize: 10, padding: "4px 10px", borderRadius: 7, border: "none", fontWeight: 700, cursor: "pointer",
+                                      background: wkPaid ? "rgba(255,85,85,0.15)" : "rgba(0,184,148,0.15)",
+                                      color: wkPaid ? "#ff5555" : "#00b894" }}>
+                                    {wkPaid ? "Unpaid" : "Mark Paid"}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Per-goal breakdown */}
+                      <div style={{ fontSize: 10, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Goal breakdown</div>
+                      {mGoals.map(g => {
+                        const cat = GOAL_CATEGORIES.find(c => c.id === g.category) || GOAL_CATEGORIES[8];
+                        const detail = getGoalMonthDetail(m.id, g.id, selMonth);
+                        if (!detail.weeks.length) return null;
+                        return (
+                          <div key={g.id} style={{ background: "#0d0d0d", borderRadius: 8, padding: "9px 12px", marginBottom: 6 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: detail.weeks.length > 0 ? 6 : 0 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600 }}>{cat.icon} {g.name}</span>
+                              <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 13, color: detail.fine>0?"#ff5555":"#c8f53b", fontWeight: 700 }}>
+                                ₹{detail.fine.toLocaleString("en-IN")}
+                              </span>
+                            </div>
+                            {detail.weeks.map(w => {
+                              const wDates = getWeekDates(w.wk);
+                              return (
+                                <div key={w.wk} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", padding: "2px 0", borderTop: "1px solid #1a1a1a", marginTop: 3 }}>
+                                  <span>{formatDate(wDates[0])}–{formatDate(wDates[6])}</span>
+                                  <span>{w.doneDays}/{g.weeklyTarget} done</span>
+                                  <span style={{ color: w.fine>0?"#ff5555":"#666" }}>
+                                    {w.override?.overridden ? <span style={{color:"#ffb800"}}>⚡ ₹{w.fine}</span> : w.fine>0?`₹${w.fine}`:"—"}
+                                  </span>
+                                  {isAdmin && w.fine > 0 && !w.override?.overridden && (
+                                    <button onClick={e=>{e.stopPropagation();onOverride(m.id,w.wk,g.id,g.name,m.name,w.fine);}}
+                                      style={{fontSize:9,padding:"1px 6px",borderRadius:4,border:"1px solid rgba(255,184,0,0.3)",background:"transparent",color:"#ffb800",cursor:"pointer"}}>
+                                      Override
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+
+                      {mFine === 0 && <div style={{ fontSize: 13, color: "#555", textAlign: "center", padding: "8px 0" }}>✓ No fines this month</div>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {!selMonth && selYear && (
+        <div style={{ textAlign: "center", padding: "28px 0", color: "#555", fontSize: 13 }}>
+          Select a month above to see detailed fines
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2189,73 +2398,93 @@ This CANNOT be undone.`)) return;
         )}
 
         {/* ════ LEADERBOARD ════ */}
-        {tab === "leaderboard" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24 }}>LEADERBOARD</div>
-              {isAdmin && (
-                <button onClick={() => exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, months })}
-                  style={{ background: "rgba(200,245,59,0.1)", border: "1px solid rgba(200,245,59,0.3)", color: C.lime, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
-                  📥 Export CSV
-                </button>
-              )}
-            </div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>All-time fines · auto-resets each month</div>
-            {members.map((m, idx) => {
-              // All-time fine: sum all dayLog-based fines across all weeks
-              const memberGoalIds = goals.filter(g => g.memberId === m.id).map(g => g.id);
-              const allWeekKeys = [...new Set(
-                Object.keys(dayLogs)
-                  .filter(k => k.startsWith(`${m.id}__`))
-                  .map(k => { const d = k.split("__")[2]; return d ? getWeekKey(new Date(d)) : null; })
-                  .filter(Boolean)
-              )];
-              const allFine = allWeekKeys.reduce((wSum, wk) => {
-                return wSum + goals.filter(g => g.memberId === m.id && g.active !== false)
-                  .reduce((gSum, g) => {
-                    const override = fines[`${m.id}__${wk}__${g.id}`];
-                    return gSum + calcFine({ goal: g, weekKey: wk, dayLogs, override });
-                  }, 0);
-              }, 0);
-              const paidTotal = Object.keys(finePayments)
-                .filter(k => k.startsWith(`${m.id}__`) && finePayments[k]?.paid)
-                .reduce((sum, k) => {
-                  const wk = k.split("__")[1];
-                  return sum + calcMemberWeekFine(m.id, wk);
-                }, 0);
-              return (
-                <Card key={m.id} style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <Av name={m.name} emoji={m.emoji} idx={idx} size={42} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</div>
-                      <div style={{ fontSize: 11, color: C.green }}>Paid: ₹{paidTotal.toLocaleString("en-IN")}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 18, fontWeight: 700, color: allFine > 0 ? C.red : C.lime }}>₹{allFine.toLocaleString("en-IN")}</div>
-                      <div style={{ fontSize: 10, color: C.muted }}>total fines</div>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
+        {tab === "leaderboard" && (() => {
+          // Build full month index from dayLogs
+          const allMonths = new Set();
+          Object.keys(dayLogs).forEach(k => {
+            const d = k.split("__")[2];
+            if (d) allMonths.add(d.substring(0,7));
+          });
+          const now = new Date();
+          allMonths.add(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`);
+          const sortedMonths = [...allMonths].sort().reverse(); // newest first
+          const years = [...new Set(sortedMonths.map(m => m.substring(0,4)))];
 
-            {months.length > 0 && (
-              <div style={{ marginTop: 20 }}>
-                <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 20, marginBottom: 10 }}>PAST MONTHS</div>
-                {months.map(mo => (
-                  <Card key={mo.id} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <div style={{ fontWeight: 600 }}>{mo.id}</div>
-                      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 13, color: C.red }}>₹{(mo.totalFines || 0).toLocaleString("en-IN")}</div>
-                    </div>
-                    <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Closed by {mo.closedBy} · {formatDate(mo.closedAt)}</div>
-                  </Card>
-                ))}
+          // Fine calc for a member for a whole month
+          const getMemberMonthFine = (memberId, mo) => {
+            const mGoals = goals.filter(g => g.memberId === memberId && g.active !== false);
+            const allWks = [...new Set(
+              Object.keys(dayLogs)
+                .filter(k => k.startsWith(`${memberId}__`) && k.split("__")[2]?.startsWith(mo))
+                .map(k => { try { return getWeekKey(new Date(k.split("__")[2])); } catch { return null; } })
+                .filter(Boolean)
+            )];
+            return mGoals.reduce((mSum, g) =>
+              mSum + allWks.reduce((wSum, wk) => {
+                const override = fines[`${memberId}__${wk}__${g.id}`];
+                return wSum + calcFine({ goal: g, weekKey: wk, dayLogs, override });
+              }, 0), 0);
+          };
+
+          // Per-goal fine for a member for a month
+          const getGoalMonthDetail = (memberId, goalId, mo) => {
+            const g = goals.find(x => x.id === goalId);
+            if (!g) return { fine: 0, weeks: [] };
+            const allWks = [...new Set(
+              Object.keys(dayLogs)
+                .filter(k => k.startsWith(`${memberId}__${goalId}__`) && k.split("__")[2]?.startsWith(mo))
+                .map(k => { try { return getWeekKey(new Date(k.split("__")[2])); } catch { return null; } })
+                .filter(Boolean)
+            )].sort();
+            const weeks = allWks.map(wk => {
+              const override = fines[`${memberId}__${wk}__${goalId}`];
+              const fine = calcFine({ goal: g, weekKey: wk, dayLogs, override });
+              const wDates = getWeekDates(wk);
+              const doneDays = getDoneDays(g, wk, dayLogs);
+              return { wk, fine, override, doneDays };
+            });
+            return { fine: weeks.reduce((s,w) => s+w.fine, 0), weeks };
+          };
+
+          return (
+            <div>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24 }}>SCORES</div>
+                {isAdmin && (
+                  <button onClick={() => exportData({ members, goals, dayLogs, fines, finePayments, weekNotes, months })}
+                    style={{ background: "rgba(200,245,59,0.1)", border: "1px solid rgba(200,245,59,0.3)", color: C.lime, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                    📥 Export CSV
+                  </button>
+                )}
               </div>
-            )}
-          </div>
-        )}
+
+              {/* Year selector */}
+              <ScoresDrillDown
+                years={years}
+                sortedMonths={sortedMonths}
+                members={members}
+                goals={goals}
+                dayLogs={dayLogs}
+                fines={fines}
+                finePayments={finePayments}
+                getMemberMonthFine={getMemberMonthFine}
+                getGoalMonthDetail={getGoalMonthDetail}
+                calcFine={calcFine}
+                isAdmin={isAdmin}
+                myMember={myMember}
+                onMarkPaid={async (memberId, weekKey, paid) => {
+                  if (paid) await markFinePaid(memberId, weekKey, myMember?.name || "Admin");
+                  else await markFineUnpaid(memberId, weekKey);
+                  showToast(paid ? "Marked paid ✅" : "Marked unpaid");
+                }}
+                onOverride={(memberId, wk, goalId, goalName, memberName, rawFine) => {
+                  setOverrideModal({ memberId, weekKey: wk, goalId, memberName, goalName, adminName: myMember?.name || "Admin", rawFine });
+                }}
+              />
+            </div>
+          );
+        })()}
 
         {/* ════ FEED ════ */}
         {tab === "feed" && (
