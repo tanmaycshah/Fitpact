@@ -2635,7 +2635,42 @@ This CANNOT be undone.`)) return;
               <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 24 }}>MEMBERS & GOALS</div>
               {isAdmin && <button style={mkBP(false)} onClick={() => setAddMemberOpen(true)}>+ Add</button>}
             </div>
-            {!isAdmin && <div style={{ background: "rgba(255,184,0,0.08)", border: "1px solid rgba(255,184,0,0.2)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: C.amber }}>View only — admin manages members & goals</div>}
+
+            {/* ── Unlinked sign-ups ── */}
+            {isSuperAdmin && (() => {
+              const unlinked = users.filter(u => !u.memberId && !u.isPending);
+              if (!unlinked.length) return null;
+              return (
+                <div style={{ background: "rgba(255,184,0,0.07)", border: "1px solid rgba(255,184,0,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+                  <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 16, color: C.amber, marginBottom: 10 }}>
+                    {unlinked.length} SIGN-UP{unlinked.length > 1 ? "S" : ""} NOT LINKED
+                  </div>
+                  {unlinked.map(u => (
+                    <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, padding: "8px 10px", background: "#0d0d0d", borderRadius: 9 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{u.displayName || u.email}</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>{u.email}</div>
+                      </div>
+                      <select
+                        defaultValue=""
+                        onChange={async e => {
+                          if (!e.target.value) return;
+                          await approveUser(u.id, e.target.value);
+                          await makeAdmin(u.id, true);
+                          showToast(`Linked & made admin ✅`);
+                          await postActivity({ type: "member_joined", memberName: members.find(m => m.id === e.target.value)?.name || u.email });
+                        }}
+                        style={{ ...IS, width: "auto", fontSize: 12, padding: "5px 10px" }}>
+                        <option value="">Link to member →</option>
+                        {members.filter(m => !users.some(u2 => u2.memberId === m.id)).map(m => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             {members.map((m, idx) => {
               const mGoals = goals.filter(g => g.memberId === m.id && g.active !== false);
@@ -2671,7 +2706,7 @@ This CANNOT be undone.`)) return;
                   <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <div style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>Goals ({mGoals.length})</div>
-                      {isAdmin && <button onClick={() => { setAddGoalForMember(m.id); setAddGoalOpen(true); }} style={{ ...mkBP(false), fontSize: 10, padding: "4px 10px" }}>+ Goal</button>}
+                      {(isAdmin || myMember?.id === m.id) && <button onClick={() => { setAddGoalForMember(m.id); setAddGoalOpen(true); }} style={{ ...mkBP(false), fontSize: 10, padding: "4px 10px" }}>+ Goal</button>}
                     </div>
                     {mGoals.map(goal => {
                       const cat = GOAL_CATEGORIES.find(c => c.id === goal.category) || GOAL_CATEGORIES[7];
