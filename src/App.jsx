@@ -26,7 +26,7 @@ import {
   currentWeekKey, getWeekKey, getWeekDates,
   today, formatDate, formatDateTime, getDayLabel,
   getMonthKey, uid, buildWAMsg,
-  calcFine, calcMaxFine, getDoneDays,
+  calcFine, calcMaxFine, getDoneDays, getDaysRequired, getDailyTarget,
   getGoalLogType, getGoalDirection, getGoalUnit,
 } from "./utils";
 
@@ -624,7 +624,7 @@ function MemberForm({ initial, onSave, onClose, isEdit }) {
 
 // ── GOAL FORM ─────────────────────────────────────────────────────────────────
 function GoalForm({ initial, members, onSave, onClose, isEdit }) {
-  const EMPTY = { memberId: "", name: "", category: "gym", weeklyTarget: "", fineAmount: "1000", goalType: "ongoing", cadence: "", direction: "", logType: "", customUnit: "", notes: "" };
+  const EMPTY = { memberId: "", name: "", category: "gym", weeklyTarget: "", dailyTarget: "", daysPerWeek: "", fineAmount: "1000", goalType: "ongoing", cadence: "", direction: "", logType: "", customUnit: "", notes: "" };
   const [form, setForm] = useState(initial || EMPTY);
   const [saving, setSaving] = useState(false);
   const ref = useRef(false);
@@ -643,10 +643,16 @@ function GoalForm({ initial, members, onSave, onClose, isEdit }) {
   // When category changes, reset overrides
   const setCategory = (val) => setForm(f => ({ ...f, category: val, cadence: "", direction: "", logType: "", customUnit: "" }));
 
+  const isDailyNumeric = effLogType === "number" && effCadence === "daily";
   const fineHint = () => {
-    if (isJunk) return `Each meal over ${form.weeklyTarget || "?"} = ₹${form.fineAmount || 0} fine`;
-    if (effLogType === "tick") return `Miss a session = ₹${form.fineAmount || 0} fine (target: ${form.weeklyTarget || "?"}/${effCadence === "daily" ? "day" : "wk"})`;
-    if (effCadence === "daily") return `Miss daily target of ${form.weeklyTarget || "?"} ${effUnit} = ₹${form.fineAmount || 0} fine`;
+    if (isJunk) return `Each meal over ${form.weeklyTarget || "?"}/wk = ₹${form.fineAmount || 0} fine`;
+    if (effLogType === "tick") return `Miss a session = ₹${form.fineAmount || 0} fine · max ₹${(Number(form.weeklyTarget)||0) * (Number(form.fineAmount)||0)} if zero sessions`;
+    if (isDailyNumeric) {
+      const dt = form.dailyTarget || "?";
+      const dpw = form.daysPerWeek || "?";
+      const max = (Number(form.daysPerWeek)||0) * (Number(form.fineAmount)||0);
+      return `Hit ${dt} ${effUnit} on ${dpw} days/wk. Miss a day = ₹${form.fineAmount || 0}. Max fine = ₹${max}/wk`;
+    }
     return `Miss weekly target of ${form.weeklyTarget || "?"} ${effUnit} = ₹${form.fineAmount || 0} fine`;
   };
 
@@ -654,7 +660,7 @@ function GoalForm({ initial, members, onSave, onClose, isEdit }) {
     if (!form.name.trim() || !form.memberId) { alert("Member and goal name required"); return; }
     if (saving || ref.current) return;
     ref.current = true; setSaving(true);
-    try { await onSave({ ...form, weeklyTarget: Number(form.weeklyTarget) || 0, fineAmount: Number(form.fineAmount) || 0 }); }
+    try { await onSave({ ...form, weeklyTarget: Number(form.weeklyTarget) || 0, dailyTarget: Number(form.dailyTarget) || 0, daysPerWeek: Number(form.daysPerWeek) || 0, fineAmount: Number(form.fineAmount) || 0 }); }
     finally { setSaving(false); ref.current = false; }
   };
 
@@ -714,19 +720,51 @@ function GoalForm({ initial, members, onSave, onClose, isEdit }) {
         </select>
       </Fld>
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <Fld label={`${effDirection === "max" ? "Max allowed" : "Target"} (${effUnit}/${effCadence === "daily" ? "day" : "wk"})`}>
-            <input type="number" value={form.weeklyTarget} onChange={e => s("weeklyTarget", e.target.value)}
-              placeholder={effDirection === "max" ? "e.g. 2" : "e.g. 3"} style={IS} min="0" step="0.5" />
-          </Fld>
+      {isDailyNumeric ? (
+        // Daily numeric goals need TWO fields: daily value target + days per week
+        <>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <Fld label={`Daily target (${effUnit}/day)`}>
+                <input type="number" value={form.dailyTarget} onChange={e => s("dailyTarget", e.target.value)}
+                  placeholder={`e.g. ${cat.id==="steps"?"10000":cat.id==="water"?"3":"50"}`} style={IS} min="0" step="1" />
+              </Fld>
+            </div>
+            <div style={{ flex: 1 }}>
+              <Fld label="Days per week required">
+                <input type="number" value={form.daysPerWeek} onChange={e => s("daysPerWeek", e.target.value)}
+                  placeholder="e.g. 4" style={IS} min="1" max="7" step="1" />
+              </Fld>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <Fld label="Fine per missed day (₹)">
+                <input type="number" value={form.fineAmount} onChange={e => s("fineAmount", e.target.value)} style={IS} min="0" step="100" />
+              </Fld>
+            </div>
+            <div style={{ flex: 1, display: "flex", alignItems: "flex-end", paddingBottom: 14 }}>
+              <div style={{ fontSize: 12, color: "#c8f53b", fontFamily: "'DM Mono',monospace" }}>
+                Max: ₹{((Number(form.daysPerWeek)||0) * (Number(form.fineAmount)||0)).toLocaleString("en-IN")}/wk
+              </div>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <Fld label={`${effDirection === "max" ? "Max allowed" : "Target"} (${effUnit}/${effCadence === "daily" ? "day" : "wk"})`}>
+              <input type="number" value={form.weeklyTarget} onChange={e => s("weeklyTarget", e.target.value)}
+                placeholder={effDirection === "max" ? "e.g. 2" : "e.g. 3"} style={IS} min="0" step="0.5" />
+            </Fld>
+          </div>
+          <div style={{ flex: 1 }}>
+            <Fld label="Fine per miss (₹)">
+              <input type="number" value={form.fineAmount} onChange={e => s("fineAmount", e.target.value)} style={IS} min="0" step="100" />
+            </Fld>
+          </div>
         </div>
-        <div style={{ flex: 1 }}>
-          <Fld label="Fine per miss (₹)">
-            <input type="number" value={form.fineAmount} onChange={e => s("fineAmount", e.target.value)} style={IS} min="0" step="100" />
-          </Fld>
-        </div>
-      </div>
+      )}
 
       <div style={{ background: "rgba(200,245,59,0.05)", border: "1px solid rgba(200,245,59,0.15)", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: C.muted, marginBottom: 14 }}>
         💡 {fineHint()}
@@ -2058,32 +2096,41 @@ This CANNOT be undone.`)) return;
                             {/* Goal header with running fine counter */}
                             {(() => {
                               const maxGoalFine = calcMaxGoalFine(goal);
-                              const fineClr = fine === 0 ? C.green : fine < maxGoalFine * 0.5 ? C.amber : C.red;
-                              const saved = maxGoalFine - fine;
+                              const daysRequired = getDaysRequired(goal);
+                              const dailyTgt = getDailyTarget(goal);
+                              const isDailyNum = getGoalLogType(goal) === "number" && getGoalCadence(goal) === "daily";
+                              // Only show progress bar if at least one day has been logged
+                              const hasAnyLog = weekDates.some(d => dayLogs[`${activeMem.id}__${goal.id}__${d}`]);
+                              const fineClr = fine === 0 && hasAnyLog ? C.green : fine === 0 ? C.muted : fine < maxGoalFine * 0.5 ? C.amber : C.red;
+                              const saved = maxGoalFine > 0 && hasAnyLog ? maxGoalFine - fine : 0;
+                              // Display target string
+                              const targetStr = isDailyNum
+                                ? `${dailyTgt.toLocaleString()} ${unit}/day · ${daysRequired}x/wk`
+                                : `${goal.weeklyTarget} ${unit}/wk`;
                               return (
                                 <div style={{ marginBottom: 10 }}>
                                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                                     <span style={{ fontSize: 18 }}>{cat.icon}</span>
                                     <div style={{ flex: 1 }}>
                                       <div style={{ fontWeight: 600, fontSize: 13 }}>{goal.name}</div>
-                                      <div style={{ fontSize: 10, color: C.muted }}>Target: {goal.weeklyTarget} {unit}/wk · ₹{goal.fineAmount}/miss</div>
+                                      <div style={{ fontSize: 10, color: C.muted }}>Target: {targetStr} · ₹{goal.fineAmount}/miss</div>
                                     </div>
                                     <div style={{ textAlign: "right" }}>
                                       <div style={{ fontFamily: "'Bebas Neue',cursive", fontSize: 20, color: fineClr, lineHeight: 1 }}>
                                         ₹{fine.toLocaleString("en-IN")}
                                       </div>
                                       <div style={{ fontSize: 9, color: C.muted }}>
-                                        {fine === 0 ? "✓ no fine" : `of ₹${maxGoalFine.toLocaleString("en-IN")} max`}
+                                        {!hasAnyLog ? "not logged yet" : fine === 0 ? "✓ no fine" : `of ₹${maxGoalFine.toLocaleString("en-IN")} max`}
                                       </div>
                                     </div>
                                   </div>
-                                  {maxGoalFine > 0 && (
+                                  {maxGoalFine > 0 && hasAnyLog && (
                                     <div>
                                       <div style={{ height: 4, background: "#1a1a1a", borderRadius: 3, overflow: "hidden", marginBottom: 3 }}>
                                         <div style={{ height: "100%", width: `${Math.max(0, 100 - Math.round((fine/maxGoalFine)*100))}%`, background: fineClr, borderRadius: 3, transition: "width 0.4s ease" }} />
                                       </div>
                                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.muted }}>
-                                        <span>{doneDays}/{goal.weeklyTarget} done</span>
+                                        <span>{doneDays}/{daysRequired} days done</span>
                                         {saved > 0 && <span style={{ color: C.green }}>₹{saved.toLocaleString("en-IN")} saved ✓</span>}
                                       </div>
                                     </div>

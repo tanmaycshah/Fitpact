@@ -146,26 +146,30 @@ export function calcFine({ goal, weekKey, dayLogs, override }) {
   }
 
   // ── NUMERIC MIN goals (steps, water, running, pushups, weight) ────────────
-  // direction === "min"
-  // cadence === "daily" → fine per day where logged value < daily target
-  // cadence === "weekly" → one fine if weekly total < target
   if (logType === "number" && direction === "min") {
     const cadence = getGoalCadence(goal);
     if (cadence === "daily") {
-      // Fine per missed day — only count days that have been logged
-      // (don't penalise future/unlogged days)
+      // Daily goals have TWO parameters:
+      //   goal.dailyTarget  = value to hit each day (e.g. 10000 steps)
+      //   goal.daysPerWeek  = how many days per week required (e.g. 4)
+      //   goal.weeklyTarget = fallback if only one field set
+      const dailyTarget = Number(goal.dailyTarget) || Number(goal.weeklyTarget) || 0;
+      const daysRequired = Number(goal.daysPerWeek) || 7; // default: every day
       const todayStr = typeof window !== "undefined"
         ? new Date().toISOString().split("T")[0]
         : weekDates[6];
-      let missedDays = 0;
+
+      // Count days where value was logged AND met the daily target
+      let daysMet = 0;
       weekDates.forEach(d => {
-        if (d > todayStr) return; // skip future
+        if (d > todayStr) return;
         const dl = dayLogs[`${goal.memberId}__${goal.id}__${d}`];
-        if (!dl) return; // skip unlogged days — benefit of doubt
-        const val = Number(dl.value) || 0;
-        if (val < target) missedDays++;
+        if (!dl) return; // unlogged = benefit of doubt (not penalised)
+        if ((Number(dl.value) || 0) >= dailyTarget) daysMet++;
       });
-      return missedDays * finePerMiss;
+
+      const missed = Math.max(0, daysRequired - daysMet);
+      return missed * finePerMiss;
     }
     // Weekly cadence — one fine if total misses weekly target
     const total = weekDates.reduce((sum, d) => {
@@ -189,18 +193,48 @@ export function calcMaxFine({ goal }) {
   if (logType === "tick") return target * finePerMiss;
   if (logType === "number" && direction === "max") return 0; // unlimited, no ceiling
   if (logType === "number" && direction === "min") {
-    // Daily goals: max = 7 days × finePerMiss
-    return cadence === "daily" ? 7 * finePerMiss : finePerMiss;
+    if (cadence === "daily") {
+      // Max fine = daysPerWeek × finePerMiss (not 7 × finePerMiss)
+      const daysRequired = Number(goal.daysPerWeek) || 7;
+      return daysRequired * finePerMiss;
+    }
+    return finePerMiss; // weekly: one fine
   }
   return 0;
 }
 
 // How many days logged done this week
 export function getDoneDays(goal, weekKey, dayLogs) {
+  const logType = getGoalLogType(goal);
+  const todayStr = new Date().toISOString().split("T")[0];
   return getWeekDates(weekKey).filter(d => {
+    if (d > todayStr) return false;
     const dl = dayLogs[`${goal.memberId}__${goal.id}__${d}`];
-    return getGoalLogType(goal) === "tick" ? dl?.done === true : (Number(dl?.value) || 0) > 0;
+    if (!dl) return false;
+    if (logType === "tick") return dl.done === true;
+    // For daily numeric: count days meeting dailyTarget
+    const dailyTarget = Number(goal.dailyTarget) || Number(goal.weeklyTarget) || 0;
+    return (Number(dl.value) || 0) >= dailyTarget;
   }).length;
+}
+
+// Get days required per week for a goal
+export function getDaysRequired(goal) {
+  const logType = getGoalLogType(goal);
+  const cadence = getGoalCadence(goal);
+  if (logType === "tick") return Number(goal.weeklyTarget) || 0;
+  if (cadence === "daily") return Number(goal.daysPerWeek) || 7;
+  return 1;
+}
+
+// Get the daily value target (for display)
+export function getDailyTarget(goal) {
+  const logType = getGoalLogType(goal);
+  const cadence = getGoalCadence(goal);
+  if (logType === "number" && cadence === "daily") {
+    return Number(goal.dailyTarget) || Number(goal.weeklyTarget) || 0;
+  }
+  return Number(goal.weeklyTarget) || 0;
 }
 
 // ── WHATSAPP ──────────────────────────────────────────────────────────────────
