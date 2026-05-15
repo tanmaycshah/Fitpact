@@ -27,7 +27,7 @@ import {
   today, formatDate, formatDateTime, getDayLabel,
   getMonthKey, uid, buildWAMsg,
   calcFine, calcMaxFine, getDoneDays, getDaysRequired, getDailyTarget,
-  getGoalLogType, getGoalDirection, getGoalUnit,
+  getGoalLogType, getGoalDirection, getGoalCadence, getGoalUnit,
 } from "./utils";
 
 // ── STYLE TOKENS ──────────────────────────────────────────────────────────────
