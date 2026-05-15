@@ -421,6 +421,7 @@ function DayLogModal({ open, onClose, goal, date, existingLog, onSave, isHistori
   if (!open || !goal) return null;
 
   const dayLabel = date ? getDayLabel(date) + " " + formatDate(date) : "";
+  const isJunkGoal = goal.category === "junk";
 
   const handleSave = async () => {
     if (saving || ref.current) return;
@@ -434,13 +435,32 @@ function DayLogModal({ open, onClose, goal, date, existingLog, onSave, isHistori
 
   return (
     <Modal open={open} title={`${goal.name?.toUpperCase()} — ${dayLabel.toUpperCase()}`} onClose={onClose} maxWidth={360}>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{cat.icon} Tap to mark done or missed</div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>{cat.icon} {isJunkGoal ? "Mark your day" : "Tap to mark done or missed"}</div>
 
       {isNumeric ? (
         <Fld label={`${unit} today`}>
           <input type="number" value={value} onChange={e => setValue(e.target.value)}
             placeholder={`Enter ${unit}`} style={{ ...IS, fontSize: 18, padding: "14px", textAlign: "center" }}
             min="0" step="0.5" autoFocus />
+        </Fld>
+      ) : isJunkGoal ? (
+        // Junk goal: "stayed clean" = done=true (green), "ate junk" = done=false (red)
+        <Fld label="How was today?">
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={() => setDone(true)} style={{
+              flex: 1, padding: "16px 8px", borderRadius: 12, fontSize: 20, textAlign: "center",
+              border: `2px solid ${done ? C.lime : C.border2}`,
+              background: done ? "rgba(200,245,59,0.1)" : "#0c0c0c", cursor: "pointer", color: done ? C.lime : C.muted,
+            }}>✅<div style={{ fontSize: 11, marginTop: 4 }}>Stayed clean</div></button>
+            <button onClick={() => setDone(false)} style={{
+              flex: 1, padding: "16px 8px", borderRadius: 12, fontSize: 20, textAlign: "center",
+              border: `2px solid ${!done ? C.red : C.border2}`,
+              background: !done ? "rgba(255,85,85,0.1)" : "#0c0c0c", cursor: "pointer", color: !done ? C.red : C.muted,
+            }}>🍕<div style={{ fontSize: 11, marginTop: 4 }}>Ate junk</div></button>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, textAlign: "center" }}>
+            {done ? "✓ Clean day — no fine" : `✕ Junk day — ₹${goal.fineAmount || 0} fine`}
+          </div>
         </Fld>
       ) : (
         <Fld label="Did you do this today?">
@@ -459,9 +479,9 @@ function DayLogModal({ open, onClose, goal, date, existingLog, onSave, isHistori
         </Fld>
       )}
 
-      <Fld label="Note (optional — reason if missed)">
+      <Fld label="Note (optional)">
         <input value={note} onChange={e => setNote(e.target.value)}
-          placeholder="e.g. was travelling, holiday" style={IS} />
+          placeholder={isJunkGoal ? "e.g. birthday dinner, had 2 slices pizza" : "e.g. was travelling, holiday"} style={IS} />
       </Fld>
 
       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>

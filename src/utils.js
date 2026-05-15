@@ -4,7 +4,7 @@ export const GOAL_CATEGORIES = [
   { id: "gym",     label: "Gym / Workout",   icon: "🏋️", defaultUnit: "sessions", cadence: "weekly", logType: "tick",   direction: "min" },
   { id: "steps",   label: "Daily Steps",     icon: "🚶", defaultUnit: "k steps",  cadence: "daily",  logType: "number", direction: "min" },
   { id: "sleep",   label: "Sleep on Time",   icon: "😴", defaultUnit: "nights",   cadence: "weekly", logType: "tick",   direction: "min" },
-  { id: "junk",    label: "No Junk Food",    icon: "🍕", defaultUnit: "meals",    cadence: "weekly", logType: "number", direction: "max" },
+  { id: "junk",    label: "No Junk Food",    icon: "🍕", defaultUnit: "clean days", cadence: "weekly", logType: "tick",   direction: "min" },
   { id: "water",   label: "Water Intake",    icon: "💧", defaultUnit: "litres",   cadence: "daily",  logType: "number", direction: "min" },
   { id: "run",     label: "Running",         icon: "🏃", defaultUnit: "km",       cadence: "weekly", logType: "number", direction: "min" },
   { id: "weight",  label: "Weight Check-in", icon: "⚖️", defaultUnit: "kg",       cadence: "weekly", logType: "number", direction: "min" },
@@ -59,11 +59,16 @@ export function getWeekDates(weekKey) {
   });
 }
 
-export function today() { return new Date().toISOString().split("T")[0]; }
+export function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
 
 export function formatDate(iso) {
   if (!iso) return "";
-  return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  const parts = iso.split("-");
+  const localDate = new Date(Number(parts[0]), Number(parts[1])-1, Number(parts[2]));
+  return localDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
 export function formatDateTime(ts) {
@@ -75,7 +80,10 @@ export function formatDateTime(ts) {
 
 // Mon=0 … Sun=6
 export function getDayLabel(iso) {
-  return ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][(new Date(iso + "T00:00:00").getDay() + 6) % 7];
+  // Parse as local date (append T00:00:00 to force local, not UTC)
+  const parts = iso.split("-");
+  const localDate = new Date(Number(parts[0]), Number(parts[1])-1, Number(parts[2]));
+  return ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][(localDate.getDay() + 6) % 7];
 }
 
 export function getMonthKey(date = new Date()) {
@@ -133,9 +141,9 @@ export function calcFine({ goal, weekKey, dayLogs, override }) {
     return missed * finePerMiss;
   }
 
-  // ── NUMERIC MAX goals (junk food, any "stay under X" goal) ────────────────
+  // ── NUMERIC MAX goals (custom "stay under X" goals) ─────────────────────────
   // direction === "max" — target = maximum allowed per week
-  // fine = (total - target) × finePerMiss, floored at 0
+  // fine = (total over limit) × finePerMiss
   if (logType === "number" && direction === "max") {
     const total = weekDates.reduce((sum, d) => {
       const dl = dayLogs[`${goal.memberId}__${goal.id}__${d}`];
